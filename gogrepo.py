@@ -885,7 +885,7 @@ def process_argv(argv):
     g1.add_argument('-skipstandalone',action='store_true', help='skip verification of any GOG standalone installer files')
     g1.add_argument('-skipshared',action='store_true',help ='skip verification of any installers included in both the GOG Galalaxy and Standalone sets')
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
-
+    g1.add_argument('-errorsonly', action='store_true', help = 'display only verify errors, omitting other information')
 
     g1 = sp1.add_parser('clean', help='Clean your games directory of files not known by manifest')
     g1.add_argument('cleandir', action='store', help='root directory containing gog games to be cleaned')
@@ -1970,7 +1970,7 @@ def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipga
                     shutil.copy(os.path.join(src_game_dir, extra_file), dest_game_dir)
 
 
-def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy,skipstandalone,skipshared,force_verify):
+def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy, skipstandalone, skipshared, force_verify, errorsonly):
     """Verifies all game files match manifest with any available md5 & file size info
     """
     item_count = 0
@@ -2100,14 +2100,14 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
             
 
             if os.path.isfile(itm_file):
-                info('verifying %s...' % itm_dirpath)  
-                
-                    
+                if not errorsonly:
+                    info('verifying %s...' % itm_dirpath)  
+
                 if itm.prev_verified and not force_verify:
-                    info('skipping previously verified %s' % itm_dirpath)            
+                    if not errorsonly:
+                        info('skipping previously verified %s' % itm_dirpath)            
                     prev_verified_cnt += 1
                     continue
-            
 
                 fail = False
                 if check_md5 and itm.md5 is not None:
@@ -2332,7 +2332,7 @@ def main(args):
         check_md5 = not args.skipmd5
         check_filesize = not args.skipsize
         check_zips = not args.skipzip
-        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete, args.clean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.forceverify)
+        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete, args.clean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.forceverify, args.errorsonly)
     elif args.command == 'backup':
         if not args.os:    
             if args.skipos:
