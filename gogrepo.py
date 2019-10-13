@@ -1756,7 +1756,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                                                         assert out.tell() == start
                                                         dlsz = ioloop(tid, path, response, out)
                                                         if (dlsz == (end - start)+1 and out.tell() == end + 1):
-                                                            downloadSegmentSuccess= True;
+                                                            downloadSegmentSuccess= True
                                                             succeed = succeed and True
                                                         else:
                                                             with lock:
@@ -1765,7 +1765,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                                                                 warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se),retries,HTTP_RETRY_DELAY))
                                                             else:
                                                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
-                                                                succeed = succeed and False;
+                                                                succeed = succeed and False
                                                         retries = retries -1 
                                                 except requests.HTTPError as e:
                                                     with lock:
@@ -1797,7 +1797,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                                     assert out.tell() == start
                                     dlsz = ioloop(tid, path, response, out)
                                     if (dlsz == (end - start)+1 and out.tell() == end + 1):
-                                        downloadSuccess= True;
+                                        downloadSuccess= True
                                         succeed = True
                                     else:
                                         with lock:
@@ -1807,7 +1807,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                                                 time.sleep(HTTP_RETRY_DELAY)
                                             else:
                                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
-                                                succeed = False;
+                                                succeed = False
                                             retries = retries -1 
                             except requests.HTTPError as e:
                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
@@ -1836,21 +1836,41 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             #debug 
             #info("thread completed")
             work.task_done()
+            
+    # array holding the last 10 samples of download rate
+    fbpsstack=[0,0,0,0,0,0,0,0,0,0]
 
     # detailed progress report
     def progress():
         with lock:
             left = sum(sizes.values())
+            fbps = 0
             for path, flowrates in sorted(rates.items()):
                 flows = {}
                 for tid, (sz, t) in flowrates:
                     szs, ts = flows.get(tid, (0, 0))
                     flows[tid] = sz + szs, t + ts
                 bps = sum(szs/ts for szs, ts in list(flows.values()) if ts > 0)
+                # sum of bps of all rates
+                fbps = fbps + bps
                 info('%10s %8.1fMB/s %2dx  %s' % \
                     (megs(sizes[path]), bps / 1024.0**2, len(flows), "%s/%s" % (os.path.basename(os.path.split(path)[0]), os.path.split(path)[1])))
+                
+            # update stack of last 10 values
+            fbpsstack.insert(0,fbps)
+            fbpsstack.pop()
+            # average average bit/s
+            fav = sum(fbpsstack)/len(fbpsstack)                
+                
             if len(rates) != 0:  # only update if there's change
+                sproj = round(left/fav) #projected download time in seconds
+                sdl = sproj % 60 # seconds
+                ddl = sproj // 86400 # days
+                hdl = (sproj - ddl * 86400) // 3600 # hours
+                mdl = (sproj - ddl * 86400 - hdl * 3600 - sdl) // 60 # minutes
+                
                 info('%s remaining' % gigs(left))
+                info('Time to finish: %s d %s h %s min %s s @ %s MB/s average' % (ddl, hdl, mdl, sdl, round(fav / 1024.0**2 , 3)))
             rates.clear()
 
     # process work items with a thread pool
@@ -1984,7 +2004,7 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
 
     items = load_manifest()
     
-    save_manifest_needed = False;
+    save_manifest_needed = False
     
     games_to_check_base = sorted(items, key=lambda g: g.title)
 
@@ -2026,13 +2046,13 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
             _ = game.galaxyDownloads
         except KeyError:
             game.galaxyDownloads = []
-            game_changed = True;
+            game_changed = True
             
         try:
             a = game.sharedDownloads
         except KeyError:
             game.sharedDownloads = []
-            game_changed = True;
+            game_changed = True
             
         
         if skipextras:
@@ -2085,7 +2105,7 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                 _ = itm.prev_verified
             except AttributeError: 
                 itm.prev_verified = False
-                game_changed = True;
+                game_changed = True
             
         
             if itm.name is None:
@@ -2138,14 +2158,14 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                     shutil.move(itm_file, dest_dir)
                 old_verify = itm.prev_verified    
                 if not fail:
-                    itm.prev_verified= True;
+                    itm.prev_verified= True
                 else:
-                    itm.prev_verified=False;
+                    itm.prev_verified=False
                 if (old_verify != itm.prev_verified): 
-                    game_changed = True;
+                    game_changed = True
             else:
                 if itm.prev_verified:
-                    itm.prev_verified=False;
+                    itm.prev_verified=False
                     game_changed = True
                 info('missing file %s' % itm_dirpath)
                 missing_cnt += 1
