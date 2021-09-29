@@ -35,6 +35,7 @@ import OpenSSL
 import platform
 import locale
 import zlib
+import csv
 from fnmatch import fnmatch
 # python 2 / 3 imports
 try:
@@ -130,6 +131,7 @@ NEW_RELEASE_URL = "/releases/latest"
 GOG_HOME_URL = r'https://www.gog.com'
 GOG_ACCOUNT_URL = r'https://www.gog.com/account'
 GOG_LOGIN_URL = r'https://login.gog.com/login_check'
+GOG_ORDERS_URL = r'https://www.gog.com/account/settings/orders'
 
 # GOG Constants
 GOG_MEDIA_TYPE_GAME  = '1'
@@ -850,7 +852,6 @@ def process_argv(argv):
     g1.add_argument('password', action='store', help='GOG password', nargs='?', default=None)
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     
-
     g1 = sp1.add_parser('update', help='Update locally saved game manifest from GOG server')
     g1.add_argument('-resumemode',action="store",choices=['noresume','resume','onlyresume'],default='resume',help="how to handle resuming if necessary")
     g1.add_argument('-strictverify',action="store_true",help="clear previously verified unless md5 match")
@@ -985,7 +986,9 @@ def process_argv(argv):
     g1.add_argument('-installersonly', action='store_true', help='only delete file types used as installers')
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     
-    
+    g1 = sp1.add_parser('orders', help='Get order history and print to CSV')
+    g1.add_argument('-csvfilename', action='store',default='orders.csv', help = 'output file name')
+    g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
 
     g1 = p1.add_argument_group('other')
     g1.add_argument('-h', '--help', action='help', help='show help message and exit')
@@ -1122,6 +1125,89 @@ def makeGOGSession(loginSession=False):
         load_cookies()
         gogSession.cookies.update(global_cookies)
     return gogSession
+
+def cmd_orders(csvfilename):
+    info("order area")
+
+    orders = []
+    products = []
+    i = 0
+    
+    api_url  = GOG_ORDERS_URL
+    api_url += "/data"
+ 
+    updateSession = makeGOGSession()
+    
+    # Fetch shelf data
+    done = False
+    while not done:
+        i += 1  # starts at page 1
+        if i == 1:
+            info('fetching order data (page %d)...' % i)
+        else:
+            info('fetching order data (page %d / %d)...' % (i, json_data['totalPages']))
+        data_response = request(updateSession,api_url,args={'canceled': '1','completed': '1','in_progress': '1','not_redeemed': '1','pending': '1','redeemed': '1','page': str(i)})
+
+#            with open("text.html","w+",encoding='utf-8') as f:
+#                f.write(data_response.text)
+        try:
+            json_data = data_response.json()
+        except ValueError:
+            error('failed to load product data (are you still logged in?)')
+            raise SystemExit(1)
+
+        # Parse out the interesting fields and add to orders dict. Then same for product dict.
+        for order_json_data in json_data['orders']:
+
+            #status seen: null [normal], "Refunded"
+
+            order = AttrDict()
+            order.id = order_json_data['publicId']
+            order.date = order_json_data['date']
+            order.dateHuman = datetime.datetime.fromtimestamp(int(order.date)).strftime('%Y-%m-%d %H:%M:%S')
+            order.status = order_json_data['status']
+            order.method = order_json_data['paymentMethod']
+            order.total = order_json_data['total']['full']
+            if (order_json_data['storeCreditUsed'].get('isZero', True) is False):
+                order.storecredit = order_json_data['storeCreditUsed']['full']
+            orders.append(order)
+            
+            for product_json_data in order_json_data['products']:
+                product = AttrDict()
+                
+                # For easier flat file output. We don't need tree structure for now.
+                product.order = order.id
+                product.date = order.dateHuman
+                
+                product.id = product_json_data['id']
+                product.title = product_json_data['title']
+                product.isRefunded = bool(product_json_data['isRefunded'])
+                if product.isRefunded:
+                    product.refundDate = product_json_data['refundDate']
+                    product.refundDateHuman = datetime.datetime.fromtimestamp(int(product.refundDate)).strftime('%Y-%m-%d %H:%M:%S')
+                currency_symbol = product_json_data['price']['symbol']
+                product.baseAmount = currency_symbol + product_json_data['price']['baseAmount']
+                product.amount = currency_symbol + product_json_data['price']['amount']
+                product.preorder = bool(product_json_data['isPreorder'])
+                product.refundable = bool(product_json_data['displayAutomaticRefundLink'])
+                products.append(product)
+            
+        if i >= json_data['totalPages']:
+            done = True
+
+    try:
+        with codecs.open(csvfilename, 'w', 'utf-8') as w:
+            csvfile = csv.writer(w)
+            csvfile.writerow(['order', 'date', 'title', 'baseAmount','amount','preorder','refundable','isRefunded','refundDateHuman'])
+            for product in products:
+                csvfile.writerow([product.order, product.date, product.title, product.baseAmount, product.amount, product.preorder, product.refundable, product.isRefunded, product.refundDateHuman if product.isRefunded else ''])
+
+        info('wrote output file ' + csvfilename)
+    # TODO: Except to handle what?
+    except IOError:
+        pass
+    return
+
 
 def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict):
     media_type = GOG_MEDIA_TYPE_GAME
@@ -2495,6 +2581,8 @@ def main(args):
     if args.command == 'login':
         cmd_login(args.username, args.password)
         return  # no need to see time stats
+    elif args.command == 'orders':
+        cmd_orders(args.csvfilename)
     elif args.command == 'update':
         if not args.os:    
             if args.skipos:
