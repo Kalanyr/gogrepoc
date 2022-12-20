@@ -218,6 +218,7 @@ Requirements
 * html5lib 0.99999 or later (https://github.com/html5lib/html5lib-python)
 * requests
 * pyOpenSSL
+* PyObjC (on MacOS if receiving "CoreFoundation module is not installed" error)
 I recommend you use `pip` to install the above python modules.
 
   ``pip install html5lib html2text``
