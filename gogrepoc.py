@@ -912,6 +912,9 @@ def check_skip_file(fname, skipfiles):
             return skipf
     return None
 
+def check_skip_patch(fname):
+    return fname.startswith("patch_")
+
 def process_path(path):
     fpath = path
     if sys.version_info[0] <= 2:
@@ -975,6 +978,7 @@ def process_argv(argv):
     g1.add_argument('-skipgalaxy', action='store_true', help='skip downloading Galaxy installers (Deprecated)' )
     g1.add_argument('-skipstandalone', action='store_true', help='skip downloading standlone installers (Deprecated)')
     g1.add_argument('-skipshared', action = 'store_true', help ='skip downloading installers shared between Galaxy and standalone (Deprecated)')
+    g1.add_argument('-skippatches', action = 'store_true', help ='skip downloading patches')
     g2 = g1.add_mutually_exclusive_group()
     g2.add_argument('-skipextras', action='store_true', help='skip downloading of any GOG extra files')
     g2.add_argument('-skipgames', action='store_true', help='skip downloading of any GOG game files (deprecated, use -skipgalaxy -skipstandalone -skipshared instead)')
@@ -1625,7 +1629,7 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
             shutil.copy(f, dest_file)
 
 
-def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,skipgalaxy,skipstandalone,skipshared, skipfiles,downloadLimit = None):
+def cmd_download(savedir, skipextras, skippatches, skipids, dryrun, ids,os_list, lang_list,skipgalaxy,skipstandalone,skipshared, skipfiles,downloadLimit = None):
     sizes, rates, errors = {}, {}, {}
     work = Queue()  # build a list of work items
 
@@ -1725,7 +1729,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
 
         if skipextras:
             item.extras = []
-            
+
         if skipstandalone:    
             item.downloads = []
             
@@ -1825,6 +1829,11 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             skipfile_skip = check_skip_file(game_item.name, skipfiles)
             if skipfile_skip:
                 info('     skip       %s (matches "%s")' % (game_item.name, skipfile_skip))
+                continue
+
+            patch_skip = check_skip_patch(game_item.name)
+            if skippatches and patch_skip:
+                info('     skip       %s (detected as patch)' % (game_item.name))
                 continue
 
             dest_file = os.path.join(item_homedir, game_item.name)
@@ -2695,7 +2704,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)
         if args.downloadlimit is not None:
             args.downloadlimit = args.downloadlimit*1024.0*1024.0 #Convert to Bytes
-        cmd_download(args.savedir, args.skipextras, args.skipids, args.dryrun, args.ids,args.os,args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles,args.downloadlimit)
+        cmd_download(args.savedir, args.skipextras, args.skippatches, args.skipids, args.dryrun, args.ids,args.os,args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles,args.downloadlimit)
     elif args.command == 'import':
         #Hardcode these as false since extras currently do not have MD5s as such skipgames would give nothing and skipextras would change nothing. The logic path and arguments are present in case this changes, though commented out in the case of arguments)
         args.skipgames = False
