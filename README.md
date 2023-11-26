@@ -215,17 +215,18 @@ Other arguments:
 Requirements
 ------------
 * Python 2.7 / Python 3
-* html5lib 0.99999 or later (https://github.com/html5lib/html5lib-python)
-* requests
-* pyOpenSSL
+* html5lib (https://github.com/html5lib/html5lib-python)
+* Requests (https://github.com/psf/requests)
+* pyOpenSSL (https://github.com/pyca/pyopenssl)
+
 I recommend you use `pip` to install the above python modules.
 
-  ``pip install html5lib html2text``
+  ``pip install -r requirements.txt``
 
 Optional
 ------------------------
 
-* html2text 2015.6.21 or later (https://pypi.python.org/pypi/html2text) (optional, used for prettying up gog game changelog html)
+* html2text 2015.6.21 or later (https://github.com/Alir3z4/html2text/) (optional, used for prettying up gog game changelog html)
 *nix:
 * dbus-python and required dependencies (*nix, optional, used to prevent suspend/sleep interrupts on *nix, where supported) (this will likely move to pydbus as it matures)
 Mac:
