@@ -217,7 +217,8 @@ Requirements
 * Python 2.7 / Python 3.8+
 * html5lib 0.99999 or later (https://github.com/html5lib/html5lib-python)
 * requests
-* pyutil
+* psutil
+
 Python 2.7 also requires
 * dateutil ( python-dateutil on pip )
 * pytz
