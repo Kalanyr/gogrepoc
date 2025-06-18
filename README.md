@@ -220,9 +220,6 @@ Requirements
 * html5lib 0.99999 or later (https://github.com/html5lib/html5lib-python)
 * requests
 * psutil
-Python 2.7 also requires
-* dateutil ( python-dateutil on pip )
-* pytz
 I recommend you use `pip` to install the above python modules.
 
   ``pip install html5lib html2text``
@@ -236,6 +233,20 @@ Optional
 Mac:
 * caffeinate support (optional, required to prevent suspend/sleep interrupts)
 
+
+Docker
+------
+To build a docker container (multi-arch)
+```
+docker build -t gogrepoc .
+```
+
+To run the subsequent image
+```
+docker run -it --rm -v $(pwd):/storage gogrepoc login
+docker run -it --rm -v $(pwd):/storage gogrepoc update
+docker run -it --rm -v $(pwd):/storage gogrepoc download
+```
 
 TODO
 ----
