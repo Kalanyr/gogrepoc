@@ -207,10 +207,86 @@ new GOG folder with clean game directory names and file names as GOG has them na
 
 --
 
+``gogrepoc.py gui`` Starts the GUI interface. 
+
+    gui
+--
+
+``gogrepoc.py compress`` Compresses a dircetory into a highly compressed 7z file. Useful for cold storage, archiving of games, or systems like GameVault.
+
+    compress [-compressdir <path>]
+    -compressdir <path>  directory to compress, default is current directory
+
+--
+
 Other arguments:
 	-h, --help  	show help message and exit. Used in all commands.
 	-nolog 			don't write to log file gogrepo.log. Used in all commands.
 	-v, --version	show version number and exit. Used in all commands.
+
+
+GUI
+------------
+The GUI is really simple, written in PySimpleGUI. A barebones implementation of the CLI commands. It's not as feature-rich as the CLI, but it's a good starting point for those who don't want to use the CLI.
+Requires logging in via the CLI first, but afterwards, the session stays persistent. 
+
+Generates a list of all games from your account that comes from the manifest file. You can then select which games you want to download.
+
+Makes grabbing specific games acquired over time easier, as you do not have to search your manifest file for the specific game ID.
+
+Allows for easily setting a specified download directory.
+
+Due to PySimpleGUI's requirements, the use of the GUI is only available on Python 3.
+
+## GUI OS Specific Instructions
+
+### Linux/Ubuntu
+------------
+Ubuntu does not support Python Virtual Environments (venv) out of the box. You will need to install the `python3-venv` package first.
+
+```bash
+sudo apt update
+sudo apt install python3-venv
+```
+
+Then you can create a virtual environment and install the required packages.
+
+The default instances of Python on Linux also do not include tkinter like they do on Windows. You'll need to install the `python3-tk` package.
+
+```bash
+sudo apt install python3-tk
+```
+
+### MacOS
+------------
+Tested on the latest MacOS 15.5. The default Python installation can be problematic, so I recommend using Homebrew to install Python 3.11. Specifically, <=3.11. Anything later has issues as noted [here](https://github.com/orgs/Homebrew/discussions/5809#discussioncomment-11638857).
+
+```bash
+brew install python@3.11
+```
+
+Then you can create a virtual environment and install the required packages.
+
+MacOS also specfically requires the `pyobjc` package to be installed for the GUI to work properly. Because MacOS is the only system that requires this, it is not included in the requirements.txt file. You can install it with:
+
+```bash
+pip install pyobjc
+```
+
+The specific version that was installed was `pyobjc==11.1`. If anything newer gets installed, and presents issues, use that version.
+
+### Windows
+------------
+
+Just install python as normal. Pyhthon 3.13.5 was used for testing the GUI and worked fine with everything in the requirements.txt file.
+
+
+Compression Script
+------------
+A simple Python based compression function is built into the main `gogrepoc.py` file. Run using `gogrepoc.py compress -compressdir $PATH`. Requires 7-Zip (or a fork of it like Nanazip) to be installed on your machine. 
+
+Useful for systems storing games on a NAS, where storage space can be a premium. Or for systems like GameVault where the library requires a specific format.
+
 
 Requirements
 ------------
@@ -225,6 +301,7 @@ I recommend you use `pip` to install the above python modules.
 
   ``pip install html5lib html2text``
 
+
 Optional
 ------------------------
 
@@ -233,6 +310,7 @@ Optional
 * dbus-python and required dependencies (*nix, optional, used to prevent suspend/sleep interrupts on *nix, where supported) (this will likely move to pydbus as it matures)
 Mac:
 * caffeinate support (optional, required to prevent suspend/sleep interrupts)
+
 
 
 TODO

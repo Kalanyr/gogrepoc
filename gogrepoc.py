@@ -16,6 +16,8 @@ __url__ = 'https://github.com/kalanyr/gogrepoc'
 
 
 # imports
+from pathlib import Path
+import subprocess
 import unicodedata
 import os
 import sys
@@ -45,6 +47,8 @@ import zlib
 from fnmatch import fnmatch
 import email.utils
 import signal
+import PySimpleGUI as sg
+
 import psutil
 minPy2 = [2,7]
 minPy3 = [3,8]
@@ -1715,7 +1719,19 @@ def process_argv(argv):
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
 
+    g1 = sp1.add_parser("gui", help="Launch the tool using the GUI")
 
+    g1 = sp1.add_parser(
+        "compress",
+        help="Compress a directory, typically your recently downloaded games",
+    )
+
+    g1.add_argument(
+            "-compressdir",
+            action="store",
+            help="The source directory to compress",
+        )
+    
     g1 = sp1.add_parser('trash', help='Permanently remove orphaned files in your game directory (removes all files unless specific parameters are set)')
     g1.add_argument('gamedir', action='store', help='root directory containing gog games')
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be trashed')
@@ -1725,8 +1741,6 @@ def process_argv(argv):
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
     
-    
-
     g1 = p1.add_argument_group('other')
     g1.add_argument('-h', '--help', action='help', help='show help message and exit')
     g1.add_argument('-v', '--version', action='version', help='show version number and exit',
@@ -1735,10 +1749,10 @@ def process_argv(argv):
     # parse the given argv.  raises SystemExit on error
     args = p1.parse_args(argv[1:])
     
-    if not args.nolog:
+    if getattr(args, 'nolog', None) is None or not args.nolog:
         rootLogger.addHandler(loggingHandler)
         
-    if not args.debug:     
+    if getattr(args, 'debug', None) is None or not args.debug:     
         rootLogger.setLevel(logging.INFO)
 
     if args.command == 'update' or args.command == 'download' or args.command == 'backup' or args.command == 'import' or args.command == 'verify':
@@ -2535,7 +2549,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
     if skipfiles:
         formattedSkipFiles = "'" + "', '".join(skipfiles) + "'"
         info("skipping files that match: {%s}" % formattedSkipFiles)
-        
+    
     if not items:
         if ids and skipids:
             error('no game(s) with id(s) in "{}" was found'.format(ids) + 'after skipping game(s) with id(s) in "{}".'.format(skipids))        
@@ -2671,8 +2685,6 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             
         if skipshared:
             filtered_sharedDownloads = []      
-                    
-            
         downloadsOS = [game_item for game_item in filtered_downloads if game_item.os_type in os_list]
         filtered_downloads= downloadsOS
         #print(item.downloads)
@@ -3952,6 +3964,353 @@ def cmd_clean(cleandir, dryrun):
     else:
         info('nothing to clean. nice and tidy!')
         
+
+
+def get_theme():
+    """
+    Get the theme to use for the program
+    Value is in this program's user settings. If none set, then use PySimpleGUI's global default theme
+    :return: The theme
+    :rtype: str
+    """
+    # First get the current global theme for PySimpleGUI to use if none has been set for this program
+    try:
+        global_theme = sg.theme_global()
+    except:
+        global_theme = sg.theme()
+    # Get theme from user settings for this program.  Use global theme if no entry found
+    user_theme = sg.user_settings_get_entry("-theme-", "")
+    if user_theme == "":
+        user_theme = global_theme
+    return user_theme
+
+
+def get_game_list():
+    """
+    Generate a list of all games available in the manifest
+    TODO: sort by date obtained so it's easier to see newly added games
+    """
+    print("getting list")
+    all_games = load_manifest()
+    game_list = []
+    for game in all_games:
+        game_list.append(game.title)
+
+    return sorted(game_list)
+
+
+def download_games_gui(selected_games, args, download_path):
+    if len(selected_games) == 0:
+        sg.popup_error(
+            "You did not select any games. You must select at least one game to download"
+        )
+    else:
+        # kick off the download
+        sg.popup_non_blocking(
+            "Downloading the selected games. Watch the console window for progress...",
+            no_titlebar=True,
+        )
+
+        if getattr(args, "skipids", None) is None:
+            args.skipids = []
+        if not getattr(args,"dryrun", False):
+            args.dryrun = False
+        if getattr(args, "skippreallocation", None) is None:
+            args.skippreallocation = False
+        if getattr(args, "clean_old_images", None) is None:
+            args.clean_old_images = False
+
+        cmd_download(
+            download_path,
+            args.skipextras,
+            args.skipids,
+            args.dryrun,
+            selected_games,
+            args.os,
+            args.lang,
+            args.skipgalaxy,
+            args.skipstandalone,
+            args.skipshared,
+            args.skipfiles,
+            args.covers,
+            args.backgrounds,
+            args.skippreallocation,
+            args.clean_old_images,
+            args.downloadlimit,
+        )
+
+
+def cmd_gui(args):
+    theme = get_theme()
+    if not theme:
+        theme = sg.OFFICIAL_PYSIMPLEGUI_THEME
+    sg.theme(theme)
+
+    left_col = sg.Col(
+        [
+            [
+                sg.Listbox(
+                    values=get_game_list(),
+                    select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE,
+                    size=(50, 20),
+                    key="-LEFT-",
+                )
+            ],
+            [
+                sg.Button(
+                    "Update List",
+                    enable_events=True,
+                    k="Update List",
+                    tooltip="Populate Game List",
+                )
+            ],
+        ],
+        element_justification="l",
+    )
+
+    right_col = [
+        [
+            sg.Listbox(
+                values=[],
+                size=(50, 20),
+                key="-RIGHT-",
+                select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE,
+            )
+        ],
+        [sg.Button("Download Selected Games", k="-DOWNLOADBUTTON-"), sg.Button("Exit")],
+    ]
+
+    choose_folder_at_top = [
+        [
+            sg.Text("Folder"),
+            sg.In(size=(25, 1), enable_events=True, key="-FOLDER-"),
+            sg.FolderBrowse(),
+        ]
+    ]
+    # ----- Full layout -----
+
+    layout = [
+        [sg.Text("GOG Game Downloader", font="Any 20")],
+        [choose_folder_at_top],
+        sg.vtop(
+            [
+                sg.Column([[left_col]], element_justification="l"),
+                sg.Column(
+                    [[sg.Button(">>", key="-MOVE-")], [sg.Button("<<", key="-REMOVE-")]]
+                ),
+                sg.Col(right_col, element_justification="c"),
+            ]
+        ),
+    ]
+
+    # --------------------------------- Create Window ---------------------------------
+
+    # All the stuff inside your window.
+    try:
+        makeGOGSession()
+
+    except (KeyError, AttributeError):
+        layout = [
+            [sg.Text("You do not have a valid GOG Session. Please Log in")],
+            [
+                [sg.Text("Enter GOG Email"), sg.InputText()],
+                [sg.Text("Enter GOG Password"), sg.InputText()],
+                [sg.Button("Login"), sg.Button("Cancel")],
+            ],
+        ]
+
+    # Create the Window
+    window = sg.Window("GOG Downloader", layout, finalize=True, metadata=0)
+
+    # Event Loop to process "events" and get the "values" of the inputs
+    while True:
+        event, values = window.read()
+        print(event)
+
+        # if user closes window or clicks cancel
+        if event == sg.WIN_CLOSED or event == "Cancel" or event == "Exit":
+            break
+        elif event == "Ok":
+            print("ok")
+
+        elif event == "Login":
+            if len(values[0]) == 0 or len(values[1]) == 0:
+                sg.popup_no_titlebar("You must enter both an email & password")
+                break
+            try:
+                cmd_login(values[0], values[1])
+                if (
+                    sg.popup_ok("Login successful. Please restart the application")
+                    == "OK"
+                ):
+                    exit()
+            except Exception as e:
+                sg.Print(f"Login failed. Please close and try again: {e}")
+        elif event == "Update List":
+            sg.popup_non_blocking(
+                "Updating the game list. Please watch the console for updates."
+            )
+
+            if getattr(args, "skipknown", None) is None:
+                args.skipknown = True
+            if getattr(args, "updateonly", None) is None:
+                args.updateonly = False
+            if getattr(args, "full", None) is None:
+                args.full = True
+            if getattr(args, "ids", None) is None:
+                args.ids = []
+            if getattr(args, "skipids", None) is None:
+                args.skipids = []   
+            if getattr(args, "skiphidden", None) is None:
+                args.skiphidden = False
+            if getattr(args, "installers", None) is None:
+                args.installers = "standalone"
+            if getattr(args, "resumemode", None) is None:
+                args.resumemode = "noresume"
+            if getattr(args, "strictverify", None) is None:
+                args.strictverify = False
+            if getattr(args, "strictdupe", None) is None:
+                args.strictdupe = False
+            if getattr(args, "lenientdownloadsupdate", None) is None:
+                args.lenientdownloadsupdate = True
+            if getattr(args, "strictextrasupdate", None) is None:
+                args.strictextrasupdate = False
+            if getattr(args, "md5xmls", None) is None:
+                args.md5xmls = False
+            if getattr(args, "nochangelogs", None) is None:
+                args.nochangelogs = True
+
+            cmd_update(
+                args.os,
+                args.lang,
+                args.skipknown,
+                args.updateonly,
+                not args.full,
+                args.ids,
+                args.skipids,
+                args.skiphidden,
+                args.installers,
+                args.resumemode,
+                args.strictverify,
+                args.strictdupe,
+                args.lenientdownloadsupdate,
+                args.strictextrasupdate,
+                args.md5xmls,
+                args.nochangelogs,
+            )
+            if (
+                sg.popup_ok(
+                    "Game list Updated. You will have to restart the app for it to update on the GUI"
+                )
+                == "OK"
+            ):
+                exit()
+
+        elif event == "-DOWNLOADBUTTON-":
+            if len(values["-FOLDER-"]) == 0:
+                print("Save path not specified. Saving to desktop...")
+                if platform.system() == "Windows":
+                    download_folder = os.path.join(os.environ["USERPROFILE"], "Desktop")
+                else:
+                    download_folder = os.path.join(os.path.expanduser("~"), "Desktop")
+            else:
+                download_folder = Path(values["-FOLDER-"])
+
+            print(f"I will download games to {download_folder}")
+            print(f"I will download these games: {window['-RIGHT-'].get_list_values()}")
+            download_games_gui(
+                window["-RIGHT-"].get_list_values(), args, download_folder
+            )
+
+        # Move items to the right list
+        elif event == "-MOVE-" and values["-LEFT-"]:
+            selected_items = values["-LEFT-"]
+            right_items = window["-RIGHT-"].get_list_values()
+            # Add selected items to the right listbox
+            window["-RIGHT-"].update(values=right_items + list(selected_items))
+            # Remove selected items from the left listbox
+            left_items = [
+                item for item in get_game_list() if item not in selected_items
+            ]
+            window["-LEFT-"].update(values=left_items)
+
+        # Remove items from the right list
+        elif event == "-REMOVE-" and values["-RIGHT-"]:
+            selected_items = values["-RIGHT-"]
+            right_items = [
+                item
+                for item in window["-RIGHT-"].get_list_values()
+                if item not in selected_items
+            ]
+            window["-RIGHT-"].update(values=right_items)
+            # Add the removed items back to the left listbox
+            window["-LEFT-"].update(
+                values=window["-LEFT-"].get_list_values() + list(selected_items)
+            )
+
+    window.close()
+
+
+def compress_folders(source_directory):
+    """
+    Compresses all folders in the given source directory into 7z archives compatible with GameVault.
+    Folders starting with '!' are skipped.
+    Deletes the folder after successful compression.
+    Is designed to compress as much as possible, results in high CPU usage.
+    """
+    # Change to the source directory
+    os.chdir(source_directory)
+
+    # Loop over each item in the directory
+    for folder in os.listdir(source_directory):
+        folder_path = os.path.join(source_directory, folder)
+
+        # if folder starts with !, then we skip it
+        # presumed !orphan or !downloading folders
+        if folder.startswith("!"):
+            print(f"Skipping folder: {folder}")
+            continue
+
+        # Check if it's a directory
+        if os.path.isdir(folder_path):
+            # Define the output archive name
+            archive_name = f"{folder}.7z"
+
+            # Command to compress the folder using 7zip with the given flags
+            command = [
+                "7z",
+                "a",
+                "-mx=9",
+                "-mfb=64",
+                "-md=32m",
+                "-ms=on",
+                archive_name,
+                folder_path,
+            ]
+
+            try:
+                # Run the command
+                subprocess.run(command, check=True)
+                print(f"Compressed {folder} into {archive_name}")
+
+                # Delete the folder after successful compression
+                shutil.rmtree(folder_path)
+                print(f"Deleted folder: {folder}")
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to compress {folder}: {e}")
+            except Exception as e:
+                print(f"Failed to delete folder {folder}: {e}")
+
+
+def cmd_compress(args):
+    compress_dir = args.compressdir
+    if not os.path.isdir(compress_dir):
+        error(f"Error: '{compress_dir}' is not a valid directory.")
+        return
+
+    compress_folders(compress_dir)
+
+
 def update_self():
     #To-Do: add auto-update to main using Last-Modified (repo for rolling, latest release for standard)
     #Add a dev mode which skips auto-updates and a manual update command which can specify rolling/standard
@@ -4122,6 +4481,35 @@ def main(args):
         if (args.installersonly):
             args.installers = True
         cmd_trash(args.gamedir,args.installers,args.images,args.dryrun)
+    elif args.command == "gui":
+        # handle None values 
+        if getattr(args, "os", None) is None:
+            if getattr(args, "skipos", None) is not None:
+                args.os = [x for x in VALID_OS_TYPES if x not in args.skipos]
+            else:
+                args.os = VALID_OS_TYPES
+        if getattr(args, "lang", None) is None:
+            if getattr(args, "skiplang", None) is not None:
+                args.lang = [x for x in VALID_LANG_TYPES if x not in args.skiplang]
+            else:
+                args.lang = VALID_LANG_TYPES
+        if getattr(args, "skipgames", None) is None:
+            args.skipstandalone = False
+            args.skipgalaxy = True
+            args.skipshared = True
+            args.skipextras = True
+            args.skipfiles = []
+            args.covers = False
+            args.backgrounds = False
+            args.downloadlimit = None
+
+        cmd_gui(args)
+        return
+    elif args.command == "compress":
+        if getattr(args, "compressdir", None) is None:
+            # you must specify a directory to compress
+            error("You must specify a directory to compress")
+        cmd_compress(args)
 
     etime = datetime.datetime.now()
     info('--')

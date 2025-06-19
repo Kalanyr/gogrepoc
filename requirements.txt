@@ -1,0 +1,19 @@
+certifi==2024.8.30
+cffi==1.17.1
+charset-normalizer==3.3.2
+cryptography==43.0.1
+html2text==2024.2.26
+html5lib==1.1
+idna==3.10
+psutil==7.0.0
+pyasn1==0.6.1
+pycparser==2.22
+pyOpenSSL==24.2.1
+# TODO: replace PySimpleGUI with a community fork due to EOL
+--extra-index-url https://PySimpleGUI.net/install 
+PySimpleGUI==5.0.7
+requests==2.32.3
+rsa==4.9
+six==1.16.0
+urllib3==2.2.3
+webencodings==0.5.1
