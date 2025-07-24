@@ -238,7 +238,7 @@ Docker
 ------
 To build a docker container (multi-arch)
 ```
-docker build -t gogrepoc .
+docker build --platform=linux/arm64/v8,linux/amd64 -t gogrepoc .
 ```
 
 To run the subsequent image
