@@ -28,7 +28,6 @@ import zipfile
 import hashlib
 import getpass
 import argparse
-import codecs
 import io
 import datetime
 import shutil
@@ -63,6 +62,7 @@ if sys.version_info[0] < 3:
     import dateutil.parser
     import pytz
     import string
+    import codecs
 # python 2 / 3 imports
 try:
     # python 2
@@ -367,11 +367,14 @@ def renew_token(session,retries=HTTP_RETRY_COUNT,delay=None):
             pass
 
 
-
 # --------------------------
 # Helper types and functions
 # --------------------------
-
+def compat_open(*args, **kwargs):
+    if sys.version_info[0] < 3:
+        return codecs.open(*args, **kwargs)
+    else:
+        return open(*args, **kwargs)
 
 def get_fs_type(path,isWindows=False):
     path = os.path.realpath(path) #We need the real location for this
@@ -424,14 +427,14 @@ class ConditionalWriter(object):
 
             file_changed = not os.path.exists(self._filename)
             if not file_changed:
-                with codecs.open(self._filename, 'r', 'utf-8') as orig:
+                with compat_open(self._filename, mode='r', encoding='utf-8') as orig:
                     for (new_chunk, old_chunk) in zip_longest(tmp, orig):
                         if new_chunk != old_chunk:
                             file_changed = True
                             break
 
             if file_changed:
-                with codecs.open(self._filename, 'w', 'utf-8') as overwrite:
+                with compat_open(self._filename, mode='w', encoding='utf-8') as overwrite:
                     tmp.seek(0)
                     shutil.copyfileobj(tmp, overwrite)
 
@@ -527,7 +530,7 @@ def move_with_increment_on_clash(src,dst,count=0):
 def load_manifest(filepath=MANIFEST_FILENAME):
     info('loading local manifest...')
     try:
-        with codecs.open(filepath, 'r' + universalLineEnd, 'utf-8') as r:
+        with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
 #            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
             ad = r.read()
             compiledregexopen =  re.compile(r"'changelog':.*?'downloads':|({)",re.DOTALL)
@@ -696,7 +699,7 @@ def save_manifest_core_worker(items,filepath,hasManifestPropsItem=False):
     len_adjustment = 0
     if (hasManifestPropsItem):
         len_adjustment = -1
-    with codecs.open(tmp_path, 'w', 'utf-8') as w:
+    with compat_open(tmp_path, mode='w', encoding='utf-8') as w:
         print('# {} games'.format(len(items)+len_adjustment), file=w)
         pprint.pprint(items, width=123, stream=w)
     if os.path.exists(bak_path):
@@ -721,7 +724,7 @@ def save_resume_manifest(items):
 def load_resume_manifest(filepath=RESUME_MANIFEST_FILENAME):
     info('loading local resume manifest...')
     try:
-        with codecs.open(filepath, 'r' + universalLineEnd, 'utf-8') as r:
+        with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
             ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
             if (sys.version_info[0] >= 3):
                 ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
@@ -732,12 +735,12 @@ def load_resume_manifest(filepath=RESUME_MANIFEST_FILENAME):
 def save_config_file(items):
     info('saving config...')
     try:
-        with codecs.open(CONFIG_FILENAME, 'w', 'utf-8') as w:
+        with compat_open(CONFIG_FILENAME, mode='w', encoding='utf-8') as w:
             print('# {} games'.format(len(items)-1), file=w)
             pprint.pprint(items, width=123, stream=w)
         info('saved config')                        
     except KeyboardInterrupt:
-        with codecs.open(CONFIG_FILENAME, 'w', 'utf-8') as w:
+        with compat_open(CONFIG_FILENAME, mode='w', encoding='utf-8') as w:
             print('# {} games'.format(len(items)-1), file=w)
             pprint.pprint(items, width=123, stream=w)
         info('saved resume manifest')            
@@ -746,7 +749,7 @@ def save_config_file(items):
 def load_config_file(filepath=CONFIG_FILENAME):
     info('loading config...')
     try:
-        with codecs.open(filepath, 'r' + universalLineEnd, 'utf-8') as r:
+        with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
             ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
             #if (sys.version_info[0] >= 3):
             #    ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
@@ -1296,7 +1299,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                 else: #Available
                                     try:
                                         #head_response = request_head(updateSession,d.href)
-                                        #with codecs.open('head_test_headers.txt', 'w', 'utf-8') as w:
+                                        #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                                         #    w.write(str(head_response.headers))
                                         #shelf_head.etree = xml.etree.ElementTree.fromstring(head_response.content)
                                         fetch_file_info(d, True,save_md5_xml,updateSession)
@@ -1383,7 +1386,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
                 else:
                     try:
                         #head_response = request_head(updateSession,d.href)
-                        #with codecs.open('head_test_headers.txt', 'w', 'utf-8') as w:
+                        #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                         #    w.write(str(head_response.headers))
                         fetch_file_info(d, False,save_md5_xml,updateSession)
                         file_info_success = True
@@ -1913,11 +1916,11 @@ def makeGOGSession(loginSession=False):
 def save_token(token):
     info('saving token...')
     try:
-        with codecs.open(TOKEN_FILENAME, 'w', 'utf-8') as w:
+        with compat_open(TOKEN_FILENAME, mode='w', encoding='utf-8') as w:
             pprint.pprint(token, width=123, stream=w)
         info('saved token')
     except KeyboardInterrupt:
-        with codecs.open(TOKEN_FILENAME, 'w', 'utf-8') as w:
+        with compat_open(TOKEN_FILENAME, mode='w', encoding='utf-8') as w:
             pprint.pprint(token, width=123, stream=w)
         info('saved token')            
         raise
@@ -1925,7 +1928,7 @@ def save_token(token):
 def load_token(filepath=TOKEN_FILENAME):
     info('loading token...')
     try:
-        with codecs.open(filepath, 'r' + universalLineEnd, 'utf-8') as r:
+        with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
             ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
         return eval(ad)
     except IOError:
@@ -1971,18 +1974,23 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             resume_manifest_syntax_version = -1
         if resume_manifest_syntax_version != RESUME_MANIFEST_SYNTAX_VERSION:
             warn('Incompatible Resume Manifest Version Detected.')
-            inp = None
-            
-            while (inp not in ["D","d","A","a"]):
-                inp = input("(D)iscard incompatible manifest or (A)bort? (D/d/A/a): ")
+            if resumeprops['complete']:
+                warn('Incompatible Resume Manifest Has Already Been Completed And Will Be Automatically Discarded')
+                resumedb = None
+                needresume = False
+            else:
+                inp = None
+                
+                while (inp not in ["D","d","A","a"]):
+                    inp = input("(D)iscard incompatible manifest or (A)bort? (D/d/A/a): ")
 
-                if (inp in ["D","d"]):
-                    warn("Discarding")
-                    resumedb = None
-                    needresume = False
-                elif (inp in ["A","a"]):
-                    warn("Aborting")
-                    sys.exit()
+                    if (inp in ["D","d"]):
+                        warn("Discarding")
+                        resumedb = None
+                        needresume = False
+                    elif (inp in ["A","a"]):
+                        warn("Aborting")
+                        sys.exit()
     except Exception:
         resumedb = None
         needresume = False
@@ -3967,14 +3975,14 @@ def update_self():
     jsonResponse = response.json()
     print(response.headers)
     print(jsonResponse)
-    with codecs.open('updatetest.test', 'w', 'utf-8') as w:
+    with compat_open('updatetest.test', mode='w', encoding='utf-8') as w:
         print(response.headers)
         print(jsonResponse, file=w)    
     response = gitSession.get(jsonResponse['tarball_url'],stream="False",timeout=HTTP_TIMEOUT)
     response.raise_for_status()
     rawResponse = response.content
     print(response.headers)
-    with codecs.open('tarballupdatetest.test', 'w', 'utf-8') as w:
+    with compat_open('tarballupdatetest.test', mode='w', encoding='utf-8') as w:
         print(response.headers,file=w)
     with open_notrunc('update.tar.gz') as w:    
         w.write(rawResponse)
@@ -3985,14 +3993,14 @@ def update_self():
     jsonResponse = response.json()
     print(response.headers)
     print(jsonResponse)
-    with codecs.open('rollingupdatetest.test', 'w', 'utf-8') as w:
+    with compat_open('rollingupdatetest.test', mode='w', encoding='utf-8') as w:
         print(response.headers,file=w)
         print(jsonResponse, file=w)    
     response = gitSession.get(REPO_HOME_URL+"/tarball/master",stream="False",timeout=HTTP_TIMEOUT)        
     response.raise_for_status()    
     rawResponse = response.content
     print(response.headers)
-    with codecs.open('tarballrollingupdatetest.test', 'w', 'utf-8') as w:
+    with compat_open('tarballrollingupdatetest.test', mode='w', encoding='utf-8') as w:
         print(response.headers,file=w)
     with open_notrunc('rolling.tar.gz') as w:    
         w.write(rawResponse)
