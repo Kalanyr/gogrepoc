@@ -432,7 +432,7 @@ class ConditionalWriter(object):
 
             file_changed = not os.path.exists(self._filename)
             if not file_changed:
-                with compat_open(self._filename, mode='r'+universalLineEnd, encoding='utf-8') as orig:
+                with compat_open(self._filename, mode='r', encoding='utf-8') as orig: #No mode U on this because we need to be aware of the actual line ends since in Python 2 we manage them manually for info.txt
                     for (new_chunk, old_chunk) in zip_longest(tmp, orig):
                         if new_chunk != old_chunk:
                             file_changed = True
