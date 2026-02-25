@@ -46,15 +46,18 @@ import email.utils
 import signal
 import psutil
 minPy2 = [2,7]
-minPy3 = [3,8]
-
+minPy3 = [3,10]
+specialPy3=[3,8]
 if sys.version_info[0] < 3:
     if sys.version_info[0] < minPy2[0] or sys.version_info[1] < minPy2[1]:
-        print("Your Python version is not supported, please update to 2.7+" )
+        print("Your Python version is not supported, please update to Python 3 if possible and "+ str(minPy2[0]) + "." + str(minPy2[1]) + " if not." )
         sys.exit(1)
 elif sys.version_info[0] < 4:
-    if sys.version_info[0] < minPy3[0] or sys.version_info[1] < minPy3[1]:
-        print("Your Python version is not supported, please update to 3.8+")
+    if sys.version_info[0] <specialPy3[0] or sys.version_info[1] < specialPy3[1]:
+        print("Your Python version is not supported, please update to "+ str(minPy3[0]) + "." + str(minPy3[1]) + "+ if possible and " +  str(specialPy3[0]) + "." + str(specialPy3[1]) + " if not (eg Windows 7 )" )
+        sys.exit(1)
+    elif sys.version_info[0] < minPy3[0] or sys.version_info[1] < minPy3[1]:
+        print("Your Python version is not supported, please update to "+ str(minPy3[0]) + "." + str(minPy3[1]) + "+" )
         sys.exit(1)
 
 if sys.version_info[0] < 3:
@@ -208,11 +211,13 @@ VALID_LANG_TYPES = list(LANG_TABLE.keys())
 
 universalLineEnd = ''
 storeExtend = 'extend'
+lineSep = "\n"
 uLongPathPrefix= u"\\\\?\\"
 
 if sys.version_info[0] < 3:
     storeExtend = 'store'
     universalLineEnd = 'U'
+    lineSep = os.linesep
 
 
 DEFAULT_FALLBACK_LANG = 'en'
@@ -427,7 +432,7 @@ class ConditionalWriter(object):
 
             file_changed = not os.path.exists(self._filename)
             if not file_changed:
-                with compat_open(self._filename, mode='r', encoding='utf-8') as orig:
+                with compat_open(self._filename, mode='r'+universalLineEnd, encoding='utf-8') as orig:
                     for (new_chunk, old_chunk) in zip_longest(tmp, orig):
                         if new_chunk != old_chunk:
                             file_changed = True
@@ -2712,48 +2717,48 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         # Generate and save a game info text file
         if not dryrun:
             with ConditionalWriter(os.path.join(item_homedir, INFO_FILENAME)) as fd_info:
-                fd_info.write(u'{0}-- {1} --{0}{0}'.format(os.linesep, item.long_title))
-                fd_info.write(u'title.......... {}{}'.format(item.title, os.linesep))
+                fd_info.write(u'{0}-- {1} --{0}{0}'.format(lineSep, item.long_title))
+                fd_info.write(u'title.......... {}{}'.format(item.title, lineSep))
                 if item.genre:
-                    fd_info.write(u'genre.......... {}{}'.format(item.genre, os.linesep))
-                fd_info.write(u'game id........ {}{}'.format(item.id, os.linesep))
-                fd_info.write(u'url............ {}{}'.format(GOG_HOME_URL + item.store_url, os.linesep))
+                    fd_info.write(u'genre.......... {}{}'.format(item.genre, lineSep))
+                fd_info.write(u'game id........ {}{}'.format(item.id, lineSep))
+                fd_info.write(u'url............ {}{}'.format(GOG_HOME_URL + item.store_url, lineSep))
                 if item.rating > 0:
-                    fd_info.write(u'user rating.... {}%{}'.format(item.rating * 2, os.linesep))
+                    fd_info.write(u'user rating.... {}%{}'.format(item.rating * 2, lineSep))
                 if item.release_timestamp > 0:
                     rel_date = datetime.datetime.fromtimestamp(item.release_timestamp).strftime('%B %d, %Y')
-                    fd_info.write(u'release date... {}{}'.format(rel_date, os.linesep))
+                    fd_info.write(u'release date... {}{}'.format(rel_date, lineSep))
                 if hasattr(item, 'gog_messages') and item.gog_messages:
-                    fd_info.write(u'{0}gog messages...:{0}'.format(os.linesep))
+                    fd_info.write(u'{0}gog messages...:{0}'.format(lineSep))
                     for gog_msg in item.gog_messages:
-                        fd_info.write(u'{0}{1}{0}'.format(os.linesep, html2text(gog_msg).strip().replace("\n",os.linesep)))
-                fd_info.write(u'{0}game items.....:{0}{0}'.format(os.linesep))
+                        fd_info.write(u'{0}{1}{0}'.format(lineSep, html2text(gog_msg).strip().replace("\n",lineSep)))
+                fd_info.write(u'{0}game items.....:{0}{0}'.format(lineSep))
                 if len(filtered_downloads) > 0:
-                    fd_info.write(u'{0}    standalone...:{0}{0}'.format(os.linesep))                
+                    fd_info.write(u'{0}    standalone...:{0}{0}'.format(lineSep))                
                 for game_item in filtered_downloads:
-                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, os.linesep))
+                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, lineSep))
                     if game_item.version:
-                        fd_info.write(u'            version: {}{}'.format(game_item.version, os.linesep))
+                        fd_info.write(u'            version: {}{}'.format(game_item.version, lineSep))
                 if len(filtered_galaxyDownloads) > 0:
-                    fd_info.write(u'{0}    galaxy.......:{0}{0}'.format(os.linesep))                                        
+                    fd_info.write(u'{0}    galaxy.......:{0}{0}'.format(lineSep))                                        
                 for game_item in filtered_galaxyDownloads:
-                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, os.linesep))
+                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, lineSep))
                     if game_item.version:
-                        fd_info.write(u'            version: {}{}'.format(game_item.version, os.linesep))
+                        fd_info.write(u'            version: {}{}'.format(game_item.version, lineSep))
                 if len(filtered_sharedDownloads) > 0:                        
-                    fd_info.write(u'{0}    shared.......:{0}{0}'.format(os.linesep))                                        
+                    fd_info.write(u'{0}    shared.......:{0}{0}'.format(lineSep))                                        
                 for game_item in filtered_sharedDownloads:
-                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, os.linesep))
+                    fd_info.write(u'        [{}] -- {}{}'.format(game_item.name, game_item.desc, lineSep))
                     if game_item.version:
-                        fd_info.write(u'            version: {}{}'.format(game_item.version, os.linesep))                        
+                        fd_info.write(u'            version: {}{}'.format(game_item.version, lineSep))                        
                 if len(filtered_extras) > 0:
-                    fd_info.write(u'{0}extras.........:{0}{0}'.format(os.linesep))
+                    fd_info.write(u'{0}extras.........:{0}{0}'.format(lineSep))
                     for game_item in filtered_extras:
-                        fd_info.write(u'    [{}] -- {}{}'.format(game_item.name, game_item.desc, os.linesep))
+                        fd_info.write(u'    [{}] -- {}{}'.format(game_item.name, game_item.desc, lineSep))
                 if item.changelog:
-                    fd_info.write(u'{0}changelog......:{0}{0}'.format(os.linesep))
-                    fd_info.write(html2text(item.changelog).strip().replace("\n",os.linesep))
-                    fd_info.write(os.linesep)
+                    fd_info.write(u'{0}changelog......:{0}{0}'.format(lineSep))
+                    fd_info.write(html2text(item.changelog).strip().replace("\n",lineSep))
+                    fd_info.write(lineSep)
         # Generate and save a game serial text file
         if not dryrun:
             try:
@@ -2761,17 +2766,17 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                     with ConditionalWriter(os.path.join(item_homedir, SERIAL_FILENAME)) as fd_serial:
                         for key in item.serials.keys():
                             serial = item.serials[key]
-                            fd_serial.write(key + ":\n\n" )
+                            fd_serial.write(key + ":" + lineSep + lineSep )
                             serial = serial.replace(u'<span>', '')
-                            serial = serial.replace(u'</span>', os.linesep)
-                            serial = serial.rstrip('\n')
+                            serial = serial.replace(u'</span>', lineSep)
+                            serial = serial.rstrip(lineSep)
                             fd_serial.write(serial)
-                            fd_serial.write("\n\n")
+                            fd_serial.write(lineSep + lineSep)
             except AttributeError:
                     if item.serial != '':
                         with ConditionalWriter(os.path.join(item_homedir, SERIAL_FILENAME)) as fd_serial:
                             item.serial = item.serial.replace(u'<span>', '')
-                            item.serial = item.serial.replace(u'</span>', os.linesep)
+                            item.serial = item.serial.replace(u'</span>', lineSep)
                             fd_serial.write(item.serial)
 
         
@@ -4017,6 +4022,9 @@ def purge_md5_chunkdata():
 
 def main(args):
     stime = datetime.datetime.now()
+
+    if sys.version_info[0] < 3 or sys.version_info[1] < minPy3[1]:
+        warn("End Of Support for Python 2.7 and 3.8 is being considered. Please contact the maintainer ( https://github.com/kalanyr/gogrepoc ) if you actually make use of either of these. ")
 
     if args.command == 'login':
         cmd_login(args.username, args.password)
