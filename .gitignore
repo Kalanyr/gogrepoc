@@ -15,5 +15,6 @@ cookies*.*
 *cookies*
 *cookies*.*
 venv
+.venv
 node_modules
 ui/build
