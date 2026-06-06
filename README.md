@@ -1,3 +1,5 @@
+#***Please do not run GOGrepoc at the moment, there is a game somewhere that is breaking the check for bad AttrDicts and causing it to wipe your manfiest. Doing some emergency investigation now. This is probably limited to one specific game but as I don't know which one I obviously $ have to recommend not running the script at all. Backup your manifest first if you must!***
+
 gogrepo gamma
 --------------
 Python-based tool for downloading your GOG.com game collections and extras to your local computer for full offline enjoyment.
