@@ -211,10 +211,114 @@ new GOG folder with clean game directory names and file names as GOG has them na
 
 --
 
+``gogrepoc.py compress`` Compresses a dircetory into a highly compressed 7z file. Useful for cold storage, archiving of games, or systems like GameVault.
+
+    compress [-compressdir <path>]
+    -compressdir <path>  directory to compress, default is current directory
+
+--
+
 Other arguments:
 	-h, --help  	show help message and exit. Used in all commands.
 	-nolog 			don't write to log file gogrepo.log. Used in all commands.
 	-v, --version	show version number and exit. Used in all commands.
+
+
+GUI
+------------
+The GUI is built with React and a Python FastAPI server. This lets the system be even more system agnostic, and run on any system that supports Python and a web browser.
+
+### Features
+
+* Clean, modern interface with dark mode support
+* Two-column game selection system:
+  - Available Games list showing all games in your GOG library
+  - Games Queue showing games selected for download and already downloaded games
+* Easy game selection with multi-select capability
+* Download directory is configurable
+* Compression options for downloads
+* Ability to mark games as downloaded without actually downloading them
+
+### Setup and Running
+
+#### Linux
+1. Install the required Python packages for the backend:
+```bash
+sudo apt update
+sudo apt install python3-venv
+python3 -m venv gogrepo-env
+source gogrepo-env/bin/activate
+pip install -r requirements.txt
+```
+
+2. Install Node.js dependencies for the UI:
+```bash
+cd ui
+npm install
+npm run build
+cd ..
+```
+
+3. Start the backend server:
+```bash
+uvicorn main:app --port 8000
+```
+
+4. In a second terminal window, start a simple HTTP server to serve the React build files:
+```bash
+cd ui
+python3 -m http.server 3000 --directory ./ui/build
+```
+
+5. Open your web browser and navigate to `http://localhost:3000` to access the GUI.
+
+#### Windows
+1. Install the required Python packages for the backend:
+```powershell
+python -m venv gogrepo-env
+.\gogrepo-env\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+2. Install Node.js dependencies for the UI:
+```powershell
+cd ui
+npm install
+npm run build
+cd ..
+```
+
+3. Start the backend server:
+```powershell
+uvicorn main:app --port 8000 
+```
+
+4. In a second terminal window, start a simple HTTP server to serve the React build files:
+```powershell
+cd ui
+python -m http.server 3000 --directory .\ui\build
+```
+
+5. Open your web browser and navigate to `http://localhost:3000` to access the GUI.
+
+
+### GUI Workflow
+
+1. Login with your GOG credentials
+2. Use the "Update List" button to fetch your game library
+3. Select games from the Available Games list
+4. Move them to the download queue using the arrow buttons
+5. Configure your download directory
+6. Optional: Enable compression for downloads
+7. Click "Download Games" to start downloading
+8. Optional: Ability to add games to the manifest without downloading them
+
+
+Compression Script
+------------
+A simple Python based compression function is built into the main `gogrepoc.py` file. Run using `gogrepoc.py compress -compressdir $PATH`. Requires 7-Zip (or a fork of it like Nanazip) to be installed on your machine. 
+
+Useful for systems storing games on a NAS, where storage space can be a premium. Or for systems like GameVault where the library requires a specific format.
+
 
 Requirements
 ------------
@@ -229,6 +333,7 @@ I recommend you use `pip` to install the above python modules.
 
   ``pip install html5lib html2text``
 
+
 Optional
 ------------------------
 
@@ -237,6 +342,7 @@ Optional
 * dbus-python and required dependencies (*nix, optional, used to prevent suspend/sleep interrupts on *nix, where supported) (this will likely move to pydbus as it matures)
 Mac:
 * caffeinate support (optional, required to prevent suspend/sleep interrupts)
+
 
 
 TODO
