@@ -11,7 +11,7 @@ if False:
 #END#
 __appname__ = 'gogrepoc.py'
 __author__ = 'eddie3,kalaynr'
-__version__ = '0.4.0-a'
+__version__ = '0.4.1-a'
 __url__ = 'https://github.com/kalanyr/gogrepoc'
 
 
@@ -188,7 +188,7 @@ LANG_TABLE = {'en': u'English',   # English
               'jp': u'\u65e5\u672c\u8a9e',      # Japanese
               'ko': u'\ud55c\uad6d\uc5b4',      # Korean
               'fr': u'fran\xe7ais',             # French
-              'cn': u'\u4e2d\u6587',            # Chinese
+              #'cn': u'\u4e2d\u6587',            # Chinese
               'cz': u'\u010desk\xfd',           # Czech
               'hu': u'magyar',                  # Hungarian
               'pt': u'portugu\xeas',            # Portuguese
@@ -204,6 +204,10 @@ LANG_TABLE = {'en': u'English',   # English
               'sv': u'svenska',         # Swedish
               'fi': u'Suomi',           # Finnish
               'no': u'norsk',           # Norsk
+              'cn': u'\u4e2d\u6587(\u7b80\u4f53)', #Chinese (Simplified)
+              'zh': u'\u4e2d\u6587(\u7e41\u9ad4)', #Chinese (Traditional)
+              'cno' : u'\u4e2d\u6587',            # Chinese (Original before Simplified/Traditional Split )
+              'es_mx' : u'Espa\u00f1ol (AL)'
               }
 
 VALID_OS_TYPES = ['windows', 'linux', 'mac']
@@ -538,40 +542,48 @@ def load_manifest(filepath=MANIFEST_FILENAME):
         with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
 #            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
             ad = r.read()
-            compiledregexopen =  re.compile(r"'changelog':.*?'downloads':|({)",re.DOTALL)
-            compiledregexclose = re.compile(r"'changelog':.*?'downloads':|(})",re.DOTALL)
-            compiledregexmungeopen = re.compile(r"[AttrDict(**]+{")
-            compiledregexmungeclose = re.compile(r"}\)+")
-            
-            def myreplacementopen(m):
-                if m.group(1):
-                   return "AttrDict(**{"
-                else:
-                   return m.group(0)
-            def myreplacementclose(m):
-                if m.group(1):
-                    return "})"
-                else:
-                    return m.group(0)
-            
-            mungeDetected = compiledregexmungeopen.search(ad) 
-            if mungeDetected:
-                warn("detected AttrDict error in manifest")
-                ad = compiledregexmungeopen.sub("{",ad)
-                ad = compiledregexmungeclose.sub("}",ad)
-                warn("fixed AttrDict in manifest")                
-
-            ad =  compiledregexopen.sub(myreplacementopen,ad)
-            ad =  compiledregexclose.sub(myreplacementclose,ad)
-
-            if (sys.version_info[0] >= 3):
-                ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
-            db = eval(ad)
-            if (mungeDetected):
-                save_manifest(db)
-        return eval(ad)
     except IOError:
         return []
+
+    compiledregexclose = re.compile(r"'changelog':.*?'changelog_end':|'changelog':.*?'downloads':|'Report-To':.*?'Server':|'report-to':.*?'server':|(})",re.DOTALL)
+    compiledregexopen =  re.compile(r"'changelog':.*?'changelog_end':|'changelog':.*?'downloads':|'Report-To':.*?'Server':|'report-to':.*?'server':|({)",re.DOTALL)
+    #compiledregexmungeopen = re.compile(r"((?:AttrDict\(**)+{")
+    #compiledregexmungeclose = re.compile(r"}\)+")
+    compiledregexmunge = re.compile(r"((?:AttrDict\(\*\*)+{)(.*?)(}\)+)")
+    
+    def myreplacementopen(m):
+        if m.group(1):
+           return "AttrDict(**{"
+        else:
+           return m.group(0)
+    def myreplacementclose(m):
+        if m.group(1):
+            return "})"
+        else:
+            return m.group(0)
+    def mungereplacement(m):
+        return "{" + m.group(2) + "}"   
+    
+    mungeDetected = compiledregexmunge.search(ad)    
+    if mungeDetected:
+        warn("detected AttrDict error in manifest")        
+        while(compiledregexmunge.search(ad)): 
+            ad = compiledregexmunge.sub(mungereplacement,ad)    
+        warn("fixed AttrDict in manifest. If this occurs more than once please report it to the maintainer.")
+
+    ad =  compiledregexopen.sub(myreplacementopen,ad)
+    ad =  compiledregexclose.sub(myreplacementclose,ad)
+
+    if (sys.version_info[0] >= 3):
+        ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
+    db = eval(ad)
+    if (mungeDetected):
+        try:
+            save_manifest(db,filepath)
+        except IOError:
+            error("Could not save repaired manifest, aborting")
+            raise SystemExit(1)
+    return db
 
 def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_md5_xml=False):
     if update_md5_xml:
@@ -3044,6 +3056,8 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             error("server response issue while downloading content for %s" % (path))
         except (requests.exceptions.SSLError) as e:
             error("SSL issue while downloading content for %s" % (path))
+        except (requests.exceptions.ChunkedEncodingError) as e:
+            error("Encoding Error In Chunk for %s" %  (path))
         responseTimer.cancel()
         #info("Exiting I/O Loop - " + path)
         return dlsz            
