@@ -1,7 +1,4 @@
-# ** This has now been isolated and there is a provisional fix on the dev branch, if you wish to help with testing.  This will be a short test before rolling to main if no issues are reported since the risk of not updating is at least comparable to the risk of updating in my assessment. 
-## **After a couple of days of trying ( and rebuilding my manifest from a backup )  I have had no luck reproducing the below issue. For now all I can really do is recommend making a manual manifest backup semi-regularly ( particularly if you have a manifest last updated after March 1st but before June 8 of 2026 in which case you should do so before running gogrepoc ). And please contact me if the issue occurs for you, so that I can try and use your manifest to work out what's going on.**
-
-### **Please do not run GOGrepoc at the moment, there is a game somewhere that is breaking the check for bad AttrDicts and causing it to wipe your manfiest. Doing some emergency investigation now. This is probably limited to one specific game but as I don't know which one I obviously  have to recommend not running the script at all. Backup your manifest first if you must!**
+# ** The fix for the rare manifest destruction defenct has now been merged to main. I recommend updating at your earliest conveniece. - Dated: 8 July 2026
 
 gogrepo gamma
 --------------
