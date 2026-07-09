@@ -84,6 +84,7 @@ update or download command. Run this once first before doing update and download
     -lang [LANG [LANG ...]] game language(s) (ex. en fr de)
 	-skiplang				skip game language(s)
 							Can't be used with -lang
+    -fallbacklang [LANG [LANG ...]]    used when no language(s) from -lang is available. Only the fist existing is used.
 	-standard				update new and updated games only (default unless -ids used)
 							Can't be used with -skipknown, -updateonly, -full
     -skipknown            	only update new games in your library
