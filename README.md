@@ -1,4 +1,5 @@
 # ** The fix for the rare manifest destruction defenct has now been merged to main. I recommend updating at your earliest conveniece. - Dated: 8 July 2026
+# ** With the official release of the fix, I am now getting some reports of the manifest being unable to be read ( non-destructively ). I am looking into this, if you experience this please contact me on the GOG thread or file an Issue ( I will probably need your manifest )
 
 gogrepo gamma
 --------------
