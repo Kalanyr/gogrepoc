@@ -545,8 +545,8 @@ def load_manifest(filepath=MANIFEST_FILENAME):
     except IOError:
         return []
 
-    compiledregexclose = re.compile(r"'changelog':.*?'changelog_end':|'changelog':.*?'downloads':|'Report-To':.*?'Server':|'report-to':.*?'server':|(})",re.DOTALL)
-    compiledregexopen =  re.compile(r"'changelog':.*?'changelog_end':|'changelog':.*?'downloads':|'Report-To':.*?'Server':|'report-to':.*?'server':|({)",re.DOTALL)
+    compiledregexclose = re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|(})",re.DOTALL)
+    compiledregexopen =  re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|({)",re.DOTALL)
     #compiledregexmungeopen = re.compile(r"((?:AttrDict\(**)+{")
     #compiledregexmungeclose = re.compile(r"}\)+")
     compiledregexmunge = re.compile(r"((?:AttrDict\(\*\*)+{)(.*?)(}\)+)")
