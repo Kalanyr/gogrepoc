@@ -16,6 +16,8 @@ __url__ = 'https://github.com/kalanyr/gogrepoc'
 
 
 # imports
+from pathlib import Path
+import subprocess
 import unicodedata
 import os
 import sys
@@ -44,6 +46,7 @@ import zlib
 from fnmatch import fnmatch
 import email.utils
 import signal
+
 import psutil
 minPy2 = [2,7]
 minPy3 = [3,10]
@@ -138,6 +141,7 @@ GAME_STORAGE_DIR = r'.'
 TOKEN_FILENAME = r'gog-token.dat'
 MANIFEST_FILENAME = r'gog-manifest.dat'
 RESUME_MANIFEST_FILENAME = r'gog-resume-manifest.dat'
+DOWNLOADED_GAMES_FILENAME= r'gog-downloaded-games.dat'
 TEMP_EXT = r'.tmp'
 BACKUP_EXT = r'.bak'
 CONFIG_FILENAME = r'gog-config.dat'
@@ -544,6 +548,47 @@ def load_manifest(filepath=MANIFEST_FILENAME):
             ad = r.read()
     except IOError:
         return []
+    
+def load_downloaded_games(filepath=DOWNLOADED_GAMES_FILENAME):
+    info('loading downloads manifest...')
+    try:
+        with codecs.open(filepath, 'r' + universalLineEnd, 'utf-8') as r:
+#            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
+            ad = r.read()
+            compiledregexopen =  re.compile(r"'changelog':.*?'downloads':|({)",re.DOTALL)
+            compiledregexclose = re.compile(r"'changelog':.*?'downloads':|(})",re.DOTALL)
+            compiledregexmungeopen = re.compile(r"[AttrDict(**]+{")
+            compiledregexmungeclose = re.compile(r"}\)+")
+            
+            def myreplacementopen(m):
+                if m.group(1):
+                   return "AttrDict(**{"
+                else:
+                   return m.group(0)
+            def myreplacementclose(m):
+                if m.group(1):
+                    return "})"
+                else:
+                    return m.group(0)
+            
+            mungeDetected = compiledregexmungeopen.search(ad) 
+            if mungeDetected:
+                warn("detected AttrDict error in manifest")
+                ad = compiledregexmungeopen.sub("{",ad)
+                ad = compiledregexmungeclose.sub("}",ad)
+                warn("fixed AttrDict in manifest")                
+
+            ad =  compiledregexopen.sub(myreplacementopen,ad)
+            ad =  compiledregexclose.sub(myreplacementclose,ad)
+
+            if (sys.version_info[0] >= 3):
+                ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
+            db = eval(ad)
+            if (mungeDetected):
+                save_manifest(db)
+        return eval(ad)
+    except IOError:
+        return []
 
     compiledregexclose = re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|(})",re.DOTALL)
     compiledregexopen =  re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|({)",re.DOTALL)
@@ -732,6 +777,74 @@ def save_manifest_core(items,filepath=MANIFEST_FILENAME):
     info('saved manifest')
     
 
+def save_downloaded_games_manifest(items,filepath=DOWNLOADED_GAMES_FILENAME):
+    save_downloaded_games_manifest_core(items, filepath)
+
+def save_downloaded_games_manifest_core(items,filepath=DOWNLOADED_GAMES_FILENAME):    
+    info('saving downloaded games manifest...')
+    save_downloaded_games_manifest_core_worker(items,filepath)
+    info('saved downloaded games manifest')
+
+def save_downloaded_games_manifest_core_worker(items, filepath, hasManifestPropsItem=False):
+
+    def filter_dupes(items):
+        choice_by_id = {}
+        
+        for obj in items:
+            obj_id = obj['id']
+            title = obj['title']
+            
+            if obj_id not in choice_by_id:
+                # Haven’t seen this id yet — take it
+                choice_by_id[obj_id] = obj
+            else:
+                current_choice = choice_by_id[obj_id]
+                # If this title has "(part 1 of" and the current doesn't, favor this one
+                if ("part 1 of" in title.lower() 
+                    and "part 1 of" not in current_choice['title'].lower()):
+                    choice_by_id[obj_id] = obj
+
+        # Now clean up the titles to remove "(Part X of Y)" if present
+        cleaned = []
+        part_pattern = re.compile(r"\s*\(part\s*\d+\s*of\s*\d+\)", re.IGNORECASE)
+
+        for obj in choice_by_id.values():
+            cleaned_obj = obj.copy()
+            cleaned_obj['title'] = re.sub(part_pattern, "", obj['title']).strip()
+            cleaned.append(cleaned_obj)
+
+        return cleaned
+
+    tmp_path = filepath+TEMP_EXT
+    bak_path = filepath+BACKUP_EXT
+    if os.path.exists(filepath):
+        shutil.copy(filepath,tmp_path)
+
+    len_adjustment = 0
+
+    if (hasManifestPropsItem):
+        len_adjustment = -1
+
+    # filter items by id. remove duplicates
+    items = filter_dupes(items)
+
+    previously_downloaded_games = load_downloaded_games(filepath)
+    # merge the previously downloaded games with the current items
+    for item in previously_downloaded_games:
+        if item not in items:
+            items.append(item)
+
+    with codecs.open(tmp_path, 'w', 'utf-8') as w:
+        print('# {} games'.format(len(items)+len_adjustment), file=w)
+        pprint.pprint(items, width=123, stream=w)
+
+    if os.path.exists(bak_path):
+        os.remove(bak_path)
+
+    if os.path.exists(filepath):
+        shutil.move(filepath,bak_path)
+
+    shutil.move(tmp_path,filepath)    
 
 def save_resume_manifest(items):
     info('saving resume manifest...')
@@ -1734,8 +1847,7 @@ def process_argv(argv):
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be cleaned')
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
-
-
+    
     g1 = sp1.add_parser('trash', help='Permanently remove orphaned files in your game directory (removes all files unless specific parameters are set)')
     g1.add_argument('gamedir', action='store', help='root directory containing gog games')
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be trashed')
@@ -1745,8 +1857,6 @@ def process_argv(argv):
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
     
-    
-
     g1 = p1.add_argument_group('other')
     g1.add_argument('-h', '--help', action='help', help='show help message and exit')
     g1.add_argument('-v', '--version', action='version', help='show version number and exit',
@@ -1755,10 +1865,10 @@ def process_argv(argv):
     # parse the given argv.  raises SystemExit on error
     args = p1.parse_args(argv[1:])
     
-    if not args.nolog:
+    if getattr(args, 'nolog', None) is None or not args.nolog:
         rootLogger.addHandler(loggingHandler)
         
-    if not args.debug:     
+    if getattr(args, 'debug', None) is None or not args.debug:     
         rootLogger.setLevel(logging.INFO)
 
     if args.command == 'update' or args.command == 'download' or args.command == 'backup' or args.command == 'import' or args.command == 'verify':
@@ -1919,10 +2029,10 @@ def makeGitHubSession(authenticatedSession=False):
     gitSession.headers={'User-Agent':USER_AGENT,'Accept':'application/vnd.github.v3+json'}
     return gitSession    
         
-def makeGOGSession(loginSession=False):
+def makeGOGSession(loginSession=False, tokenPath=TOKEN_FILENAME):
     gogSession = requests.Session()
     if not loginSession:
-        gogSession.token = load_token()
+        gogSession.token = load_token(tokenPath)
         try:
             gogSession.headers={'User-Agent':USER_AGENT,'Authorization':'Bearer ' + gogSession.token['access_token']}    
         except (KeyError, AttributeError): 
@@ -2560,7 +2670,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
     if skipfiles:
         formattedSkipFiles = "'" + "', '".join(skipfiles) + "'"
         info("skipping files that match: {%s}" % formattedSkipFiles)
-        
+    
     if not items:
         if ids and skipids:
             error('no game(s) with id(s) in "{}" was found'.format(ids) + 'after skipping game(s) with id(s) in "{}".'.format(skipids))        
@@ -2696,8 +2806,7 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             
         if skipshared:
             filtered_sharedDownloads = []      
-                    
-            
+
         downloadsOS = [game_item for game_item in filtered_downloads if game_item.os_type in os_list]
         filtered_downloads= downloadsOS
         #print(item.downloads)
@@ -2725,6 +2834,9 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         downloadslangs = [game_item for game_item in filtered_sharedDownloads if game_item.lang in valid_langs]
         filtered_sharedDownloads = downloadslangs
 
+        # add the item.id to each list item
+        for game_item in filtered_downloads + filtered_galaxyDownloads + filtered_sharedDownloads + filtered_extras:
+            game_item.id = item.id
 
         # Generate and save a game info text file
         if not dryrun:
@@ -3413,12 +3525,20 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
         raise
 
     wChanged = False;
+    completed_downloads = []
     
     #Everything here would be done inside a lock so may as well process it in the main thread.
     while not work_provisional.empty():
         (path,provisional_path,writable_game_item,work_writable_items) = work_provisional.get()
         info("moving provisionally completed download '%s' to '%s'  " % (provisional_path,path))
         shutil.move(provisional_path,path)
+        
+        downloaded_item = {}
+        downloaded_item['title'] = writable_game_item.desc
+        downloaded_item['id'] = writable_game_item.id
+
+        completed_downloads.append(downloaded_item)
+
         if writable_game_item != None:
             try:
                 _ = writable_game_item.force_change
@@ -3448,7 +3568,9 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
     if wChanged:  
         save_manifest(work_writable_items)
 
-    
+    # Track the downloads
+    save_downloaded_games_manifest(completed_downloads)
+
     for dir in os.listdir(downloading_root_dir):
         if dir != PROVISIONAL_DIR_NAME:
             testdir= os.path.join(downloading_root_dir,dir)
@@ -3979,6 +4101,97 @@ def cmd_clean(cleandir, dryrun):
     else:
         info('nothing to clean. nice and tidy!')
         
+
+def compress_games(source_directory):
+    # TODO:
+    # rename folders to capitalize the first letter of each word
+    # try and fetch the proper name and release year from somewhere so GameVault can categorize them properly
+    """
+    Compresses all folders in the given source directory into 7z archives compatible with GameVault.
+    Folders starting with '!' are skipped.
+    Deletes the folder after successful compression.
+    Is designed to compress as much as possible, results in high CPU usage.
+    """
+    # Change to the source directory
+    os.chdir(source_directory)
+
+    # Loop over each item in the directory
+    for folder in os.listdir(source_directory):
+        folder_path = os.path.join(source_directory, folder)
+
+        # if folder starts with !, then we skip it
+        # presumed !orphan or !downloading folders
+        if folder.startswith("!"):
+            print(f"Skipping folder: {folder}")
+            continue
+
+        # Check if it's a directory
+        if os.path.isdir(folder_path):
+            # Define the output archive name
+            archive_name = f"{folder}.7z"
+
+            # Command to compress the folder using 7zip with the given flags
+            command = [
+                "7z",
+                "a",
+                "-mx=9",
+                "-mfb=64",
+                "-md=32m",
+                "-ms=on",
+                archive_name,
+                folder_path,
+            ]
+
+            try:
+                # Run the command
+                subprocess.run(command, check=True)
+                print(f"Compressed {folder} into {archive_name}")
+
+                # Delete the folder after successful compression
+                shutil.rmtree(folder_path)
+                print(f"Deleted folder: {folder}")
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to compress {folder}: {e}")
+            except Exception as e:
+                print(f"Failed to delete folder {folder}: {e}")
+
+
+def add_games_without_download(ids, savedir):
+    """
+    For people who externally track what games are downloaded
+
+    Fetch the MD5 from the manfiest and store it in the gog-downloaded-game.dat
+    """
+    items = load_manifest()
+
+    if ids:
+        formattedIds =  ', '.join(map(str, ids))
+        info("downloading games with id(s): {%s}" % formattedIds)
+        downloadItems = [item for item in items if item.title in ids or str(item.id) in ids]
+        items = downloadItems
+        
+    if not items:
+        if ids:
+            error('no game with id in "{}" was found.'.format(ids))                
+        else:    
+            error('no game found')      
+        exit(1)
+
+    handle_game_renames(savedir, items, False)
+    
+    completed_downloads = []
+
+    for item in items:
+        downloaded_item = {}
+        downloaded_item['title'] = item._long_title_mirror
+        downloaded_item['id'] = item.id
+        
+        completed_downloads.append(downloaded_item)
+
+
+    save_downloaded_games_manifest(completed_downloads)
+
+
 def update_self():
     #To-Do: add auto-update to main using Last-Modified (repo for rolling, latest release for standard)
     #Add a dev mode which skips auto-updates and a manual update command which can specify rolling/standard
