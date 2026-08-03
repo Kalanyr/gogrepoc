@@ -23,6 +23,7 @@ import threading
 import logging
 import html5lib
 import pprint
+import ast
 import time
 import zipfile
 import hashlib
@@ -417,6 +418,19 @@ class AttrDict(dict):
     def __setattr__(self, key, val):
         self[key] = val
 
+def attrdictify(value):
+    if isinstance(value, dict):
+        converted = AttrDict()
+        for key, item in value.items():
+            converted[key] = attrdictify(item)
+        return converted
+    elif isinstance(value, list):
+        return [attrdictify(item) for item in value]
+    elif isinstance(value, tuple):
+        return tuple(attrdictify(item) for item in value)
+    else:
+        return value
+
 class ConditionalWriter(object):
     """File writer that only updates file on disk if contents chanaged"""
 
@@ -540,43 +554,33 @@ def load_manifest(filepath=MANIFEST_FILENAME):
     info('loading local manifest...')
     try:
         with compat_open(filepath, mode='r' + universalLineEnd, encoding='utf-8') as r:
-#            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
             ad = r.read()
     except IOError:
         return []
 
-    compiledregexclose = re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|(})",re.DOTALL)
-    compiledregexopen =  re.compile(r"'changelog':.*?(?:'downloads':|'changelog_end':)|'Report-To':.*?'Server':|'report-to':.*?'server':|({)",re.DOTALL)
-    #compiledregexmungeopen = re.compile(r"((?:AttrDict\(**)+{")
-    #compiledregexmungeclose = re.compile(r"}\)+")
-    compiledregexmunge = re.compile(r"((?:AttrDict\(\*\*)+{)(.*?)(}\)+)")
-    
-    def myreplacementopen(m):
-        if m.group(1):
-           return "AttrDict(**{"
-        else:
-           return m.group(0)
-    def myreplacementclose(m):
-        if m.group(1):
-            return "})"
-        else:
-            return m.group(0)
-    def mungereplacement(m):
-        return "{" + m.group(2) + "}"   
-    
-    mungeDetected = compiledregexmunge.search(ad)    
-    if mungeDetected:
-        warn("detected AttrDict error in manifest")        
-        while(compiledregexmunge.search(ad)): 
-            ad = compiledregexmunge.sub(mungereplacement,ad)    
-        warn("fixed AttrDict in manifest. If this occurs more than once please report it to the maintainer.")
-
-    ad =  compiledregexopen.sub(myreplacementopen,ad)
-    ad =  compiledregexclose.sub(myreplacementclose,ad)
-
     if (sys.version_info[0] >= 3):
         ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
-    db = eval(ad)
+
+    mungeDetected = False
+    try:
+        db = ast.literal_eval(ad)
+    except (SyntaxError, ValueError):
+        compiledregexmunge = re.compile(r"((?:AttrDict\(\*\*)+{)(.*?)(}\)+)")
+
+        def mungereplacement(m):
+            return "{" + m.group(2) + "}"
+
+        mungeDetected = compiledregexmunge.search(ad)
+        if not mungeDetected:
+            raise
+
+        warn("detected AttrDict error in manifest")
+        while(compiledregexmunge.search(ad)):
+            ad = compiledregexmunge.sub(mungereplacement,ad)
+        warn("fixed AttrDict in manifest. If this occurs more than once please report it to the maintainer.")
+        db = ast.literal_eval(ad)
+
+    db = attrdictify(db)
     if (mungeDetected):
         try:
             save_manifest(db,filepath)
@@ -4342,4 +4346,3 @@ if __name__ == "__main__":
         sys.exit(1)
     finally:
         wakelock.release_wakelock()
-
