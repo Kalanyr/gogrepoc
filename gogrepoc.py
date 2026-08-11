@@ -1251,7 +1251,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession):
         else:
             d.updated = email.utils.parsedate_to_datetime(d.raw_updated).isoformat() #Standardize
 
-def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession, fallbacklang, fallbackIdx = 0):
     """filters any downloads information against matching lang and os, translates
     them, and extends them into out_list
     """
@@ -1351,7 +1351,10 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                 #None worked so go with the canonical link
                                 error("Could not fetch file info so using canonical link: %s" % href_ds[0][0].href)
                                 filtered_downloads.append(href_ds[0][0])
-    out_list.extend(filtered_downloads)
+    if not len(filtered_downloads) and not fallbacklang is None and len(fallbacklang) > fallbackIdx:
+        filter_downloads(out_list, downloads_list, [fallbacklang[fallbackIdx]], os_list,save_md5_xml,updateSession, fallbacklang, fallbackIdx + 1)
+    else:
+        out_list.extend(filtered_downloads)
 
 
 def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
@@ -1428,7 +1431,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
     out_list.extend(filtered_extras)
 
 
-def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,fallbacklang):
     """filters any downloads/extras information against matching lang and os, translates
     them, and adds them to the item downloads/extras
 
@@ -1469,10 +1472,10 @@ def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
                         item.serials[potential_title] = pserial
                     else:
                         warn('DLC serial code is unprintable for %s, storing raw',potential_title)
-        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession)
-        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession)
+        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession, fallbacklang)
+        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession, fallbacklang)
         filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession)
-        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession)  # recursive
+        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession,fallbacklang)  # recursive
         
 def deDuplicateList(duplicatedList,existingItems,strictDupe):   
     deDuplicatedList = []
@@ -1596,7 +1599,8 @@ def process_argv(argv):
     g2.add_argument('-skipos', action='store', help='skip operating system(s)', nargs='*', default=[])  
     g3 = g1.add_mutually_exclusive_group()
     g3.add_argument('-lang', action=storeExtend, help='game language(s)', nargs='*', default=[])
-    g3.add_argument('-skiplang', action='store', help='skip game language(s)', nargs='*', default=[])      
+    g3.add_argument('-skiplang', action='store', help='skip game language(s)', nargs='*', default=[])
+    g1.add_argument('-fallbacklang', action='store', help='fallback language', nargs='*', default=None)
     g1.add_argument('-skiphidden',action='store_true',help='skip games marked as hidden')
     g1.add_argument('-installers', action='store', choices = ['standalone','both'], default = 'standalone',  help='GOG Installer type to use: standalone or both galaxy and standalone. Default: standalone (Deprecated)')    
     g4 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
@@ -1956,7 +1960,7 @@ def input_timeout(*ignore):
 
         
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,fallbacklang):
     media_type = GOG_MEDIA_TYPE_GAME
     items = []
     known_ids = []
@@ -2297,10 +2301,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     except Exception:
                         item[key] = item_json_data[key]
             # parse json data for downloads/extras/dlcs
-            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession)
-            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession)                
+            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession, fallbacklang)
+            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession, fallbacklang)                
             filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession)
-            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession)
+            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,fallbacklang)
             
             
             #Indepent Deduplication to make sure there are no doubles within galaxyDownloads or downloads to avoid weird stuff with the comprehention.
@@ -4062,7 +4066,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)                
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.fallbacklang)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]
@@ -4342,4 +4346,3 @@ if __name__ == "__main__":
         sys.exit(1)
     finally:
         wakelock.release_wakelock()
-
