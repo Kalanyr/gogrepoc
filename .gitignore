@@ -1,10 +1,9 @@
 .idea
-*.yml
+.yml
 *.pyc
 *.bat
 *.dat
 *.log
-*.html
 *.dump
 *.tmp
 *.bak
@@ -15,3 +14,7 @@ cookies.*
 cookies*.*
 *cookies*
 *cookies*.*
+venv
+.venv
+node_modules
+ui/build
