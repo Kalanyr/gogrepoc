@@ -153,6 +153,7 @@ NEW_RELEASE_URL = "/releases/latest"
 GOG_HOME_URL = r'https://www.gog.com'
 GOG_ACCOUNT_URL = r'https://www.gog.com/account'
 GOG_LOGIN_URL = r'https://login.gog.com/login_check'
+GOG_API_URL = r'https://api.gog.com'
 
 #GOG Galaxy URLs
 GOG_AUTH_URL = r'https://auth.gog.com/auth'
@@ -1125,11 +1126,61 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
             newExtra.force_change = True
 
 
-def fetch_chunk_tree(response, session):
+def fetch_product_download_links(session, product_id):
+    """Return GOG product API downlink resolvers indexed by their file id."""
+    if product_id is None:
+        return {}
+    response = request(session, GOG_API_URL + '/products/{}'.format(product_id),
+                       args={'expand': 'downloads,expanded_dlcs'})
+    product_data = response.json()
+    links = {}
+
+    def add_product(product):
+        slug = product.get('slug')
+        downloads = product.get('downloads') or {}
+        for category in ('installers', 'patches', 'language_packs', 'bonus_content'):
+            for download_group in downloads.get(category) or []:
+                for download_file in download_group.get('files') or []:
+                    api_downlink = download_file.get('downlink')
+                    if api_downlink and slug:
+                        file_id = urlparse(api_downlink).path.rstrip('/').split('/')[-1]
+                        links[(slug, file_id)] = api_downlink
+        for dlc in product.get('expanded_dlcs') or []:
+            add_product(dlc)
+
+    add_product(product_data)
+    return links
+
+
+def find_product_downlink(product_download_links, manual_url):
+    if not product_download_links or not manual_url:
+        return None
+    path_parts = urlparse(manual_url).path.rstrip('/').split('/')
+    if len(path_parts) < 2:
+        return None
+    return product_download_links.get((path_parts[-2], path_parts[-1]))
+
+
+def fetch_checksum_url(session, api_downlink):
+    if not api_downlink:
+        return None
+    response = request(session, api_downlink)
+    return response.json().get('checksum')
+
+
+def fetch_chunk_tree(response, session, api_downlink=None):
     file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
     if file_ext not in SKIP_MD5_FILE_EXT:
         try:
-            chunk_url = append_xml_extension_to_url_path(response.url)
+            if api_downlink:
+                chunk_url = fetch_checksum_url(session, api_downlink)
+                if not chunk_url:
+                    warn("no checksum URL found for {}".format(
+                        unquote(urlparse(response.url).path.split('/')[-1])))
+                    return None
+            else:
+                # Backwards compatibility for manifests made before api_downlink was stored.
+                chunk_url = append_xml_extension_to_url_path(response.url)
             chunk_response = request(session,chunk_url)
             shelf_etree = xml.etree.ElementTree.fromstring(chunk_response.content)
             return  shelf_etree
@@ -1166,7 +1217,7 @@ def fetch_chunk_tree(response, session):
             return None 
     return None
 
-def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession):
+def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=None):
    # fetch file name/size
     #try:
     response= request_head(updateSession,d.href)
@@ -1191,7 +1242,24 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession):
         file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
         if file_ext not in SKIP_MD5_FILE_EXT:
             try:
-                tmp_md5_url = append_xml_extension_to_url_path(response.url)
+                api_downlink = d.gog_data.get('api_downlink')
+                query = parse_qs(urlparse(response.url).query)
+                uses_signed_prefix = all(key in query for key in ('wsSecret', 'wsTime', 'prefix'))
+                if not api_downlink and uses_signed_prefix and product_api_context is not None:
+                    if product_api_context.get('download_links') is None:
+                        product_api_context.download_links = fetch_product_download_links(
+                            updateSession, product_api_context.product_id)
+                    api_downlink = find_product_downlink(
+                        product_api_context.download_links, d.gog_data.get('manualUrl'))
+                    if api_downlink:
+                        d.gog_data.api_downlink = api_downlink
+                if api_downlink:
+                    tmp_md5_url = fetch_checksum_url(updateSession, api_downlink)
+                    if not tmp_md5_url:
+                        warn("no checksum URL found for {}".format(d.name))
+                        tmp_md5_url = append_xml_extension_to_url_path(response.url)
+                else:
+                    tmp_md5_url = append_xml_extension_to_url_path(response.url)
                 md5_response = request(updateSession,tmp_md5_url)
                 shelf_etree = xml.etree.ElementTree.fromstring(md5_response.content)
                 d.gog_data.md5_xml = AttrDict()
@@ -1251,7 +1319,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession):
         else:
             d.updated = email.utils.parsedate_to_datetime(d.raw_updated).isoformat() #Standardize
 
-def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None):
     """filters any downloads information against matching lang and os, translates
     them, and extends them into out_list
     """
@@ -1319,7 +1387,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                         #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                                         #    w.write(str(head_response.headers))
                                         #shelf_head.etree = xml.etree.ElementTree.fromstring(head_response.content)
-                                        fetch_file_info(d, True,save_md5_xml,updateSession)
+                                        fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context)
                                         file_info_success = True
                                     except requests.HTTPError:
                                         warn("failed to fetch %s" % (d.href))
@@ -1354,7 +1422,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
     out_list.extend(filtered_downloads)
 
 
-def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
+def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_context=None):
     """filters and translates extras information and adds them into out_list
     """
     filtered_extras = []
@@ -1428,7 +1496,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
     out_list.extend(filtered_extras)
 
 
-def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None):
     """filters any downloads/extras information against matching lang and os, translates
     them, and adds them to the item downloads/extras
 
@@ -1469,10 +1537,10 @@ def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
                         item.serials[potential_title] = pserial
                     else:
                         warn('DLC serial code is unprintable for %s, storing raw',potential_title)
-        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession)
-        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession)
-        filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession)
-        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession)  # recursive
+        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
+        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
+        filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession,product_api_context)
+        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)  # recursive
         
 def deDuplicateList(duplicatedList,existingItems,strictDupe):   
     deDuplicatedList = []
@@ -2297,10 +2365,11 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     except Exception:
                         item[key] = item_json_data[key]
             # parse json data for downloads/extras/dlcs
-            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession)
-            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession)                
-            filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession)
-            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession)
+            product_api_context = AttrDict(product_id=item.id, download_links=None)
+            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
+            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
+            filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession,product_api_context)
+            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,product_api_context)
             
             
             #Indepent Deduplication to make sure there are no doubles within galaxyDownloads or downloads to avoid weird stuff with the comprehention.
@@ -3206,7 +3275,11 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                                                     warn("posix preallocation failed")
                 succeed = False                       
                 response = request_head(downloadSession,href)
-                chunk_tree = fetch_chunk_tree(response,downloadSession)
+                try:
+                    api_downlink = writable_game_item.gog_data.api_downlink
+                except (AttributeError, TypeError):
+                    api_downlink = None
+                chunk_tree = fetch_chunk_tree(response,downloadSession,api_downlink)
                 if (chunk_tree is not None):
                     name = chunk_tree.attrib['name']
                     expected_size = int(chunk_tree.attrib['total_size'])
