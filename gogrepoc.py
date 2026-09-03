@@ -1252,9 +1252,11 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession):
         else:
             d.updated = email.utils.parsedate_to_datetime(d.raw_updated).isoformat() #Standardize
 
-def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession,fallback_os=None):
     """filters any downloads information against matching lang and os, translates
     them, and extends them into out_list
+    fallback_os: optional; if provided and no downloads for the primary os_list exist for a language,
+    attempt to include downloads for fallback_os for that language instead.
     """
     filtered_downloads = []
     downloads_dict = dict(downloads_list)
@@ -1267,8 +1269,12 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
     # check if lang/os combo passes the specified filter
     for lang in downloads_dict:
         if lang in valid_langs:
+            # First try to collect downloads that match requested os_list
+            added_for_lang = False
+            href_ds_for_lang = []
             for os_type in downloads_dict[lang]:
                 if os_type in os_list:
+                    added_for_lang = True
                     for download in downloads_dict[lang][os_type]:
                         tempd = download['manualUrl']
                         if tempd[:10] == "/downloads":
@@ -1309,17 +1315,13 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                             debug("GOG Data Key, %s , for download clashes with Download Data Key storing detailed info in secondary dict" % key)
                                             d.gog_data[key] = download[key]
                                     except Exception:
-                                        d[key] = download[key]             
+                                        d[key] = download[key]
                                 if d.gog_data.size == "0 MB":#Not Available
                                     warn("Unreleased File, Skipping Data Fetching %s" % d.desc)
                                     d.unreleased = True
                                     unreleased = True
                                 else: #Available
                                     try:
-                                        #head_response = request_head(updateSession,d.href)
-                                        #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
-                                        #    w.write(str(head_response.headers))
-                                        #shelf_head.etree = xml.etree.ElementTree.fromstring(head_response.content)
                                         fetch_file_info(d, True,save_md5_xml,updateSession)
                                         file_info_success = True
                                     except requests.HTTPError:
@@ -1331,16 +1333,15 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                         warn("End exception report.")
                                     if d.md5_exempt == True or d.md5 != None:
                                         md5_success = True
-  
-                                    
+
                                 href_ds.append([d,file_info_success,md5_success])
                         if unreleased:
                             debug("File Not Available For Manual Download Storing Canonical Link: %s" % d.href)
                             filtered_downloads.append(d)
-                        elif file_info_success and md5_success: #Will be the current d because no more are created once we're successful
+                        elif file_info_success and md5_success:
                             debug("Successfully fetched file info and md5 from %s" % d.href)
                             filtered_downloads.append(d)
-                        else: #Check for first file info success since all MD5s failed.
+                        else:
                             any_file_info_success = False
                             for href_d in href_ds:
                                 if not any_file_info_success:
@@ -1349,9 +1350,95 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                         filtered_downloads.append(href_d[0])
                                         warn("Successfully fetched file info from %s but no md5 data was available" % href_d[0].href)
                             if not any_file_info_success:
-                                #None worked so go with the canonical link
                                 error("Could not fetch file info so using canonical link: %s" % href_ds[0][0].href)
                                 filtered_downloads.append(href_ds[0][0])
+
+            # If nothing matched for the requested OS(es) and fallback is provided, try fallback
+            if (not added_for_lang) and fallback_os is not None:
+                if fallback_os in downloads_dict[lang]:
+                    for download in downloads_dict[lang][fallback_os]:
+                        tempd = download['manualUrl']
+                        if tempd[:10] == "/downloads":
+                            tempd = "/downlink" +tempd[10:]
+                        hrefs = [GOG_HOME_URL + download['manualUrl'],GOG_HOME_URL + tempd]
+                        href_ds = []
+                        file_info_success = False
+                        md5_success = False
+                        unreleased = False
+                        for href in hrefs:
+                            if not (unreleased or (file_info_success and md5_success)):
+                                debug("trying to fetch file info from %s" % href)
+                                file_info_success = False
+                                md5_success = False
+                                d = AttrDict(desc=download['name'],
+                                             os_type=fallback_os,
+                                             lang=lang,
+                                             version=download['version'],
+                                             href= href,
+                                             md5=None,
+                                             name=None,
+                                             size=None,
+                                             prev_verified=False,
+                                             old_name=None,
+                                             unreleased = False,
+                                             md5_exempt = False,
+                                             gog_data = AttrDict(),
+                                             updated = None,
+                                             old_updated = None,
+                                             force_change = False,
+                                             old_force_change = None
+                                             )
+                                # mark this download as using the fallback OS so it's explicit in the manifest
+                                try:
+                                    d.fallback_os = fallback_os
+                                except Exception:
+                                    pass
+                                info('  -> using fallback os "%s" for download "%s" (lang: %s, game lang key: %s)' % (fallback_os, download.get('name','<unknown>'), lang, lang))
+                                for key in download:
+                                    try:
+                                        tmp_contents = d[key]
+                                        if tmp_contents != download[key]:
+                                            debug("GOG Data Key, %s , for download clashes with Download Data Key storing detailed info in secondary dict" % key)
+                                            d.gog_data[key] = download[key]
+                                    except Exception:
+                                        d[key] = download[key]
+                                if d.gog_data.size == "0 MB":
+                                    warn("Unreleased File, Skipping Data Fetching %s" % d.desc)
+                                    d.unreleased = True
+                                    unreleased = True
+                                else:
+                                    try:
+                                        fetch_file_info(d, True,save_md5_xml,updateSession)
+                                        file_info_success = True
+                                    except requests.HTTPError:
+                                        warn("failed to fetch %s" % (d.href))
+                                    except Exception:
+                                        warn("failed to fetch %s and because of non-HTTP Error" % (d.href))
+                                        warn("The handled exception was:")
+                                        log_exception('')
+                                        warn("End exception report.")
+                                    if d.md5_exempt == True or d.md5 != None:
+                                        md5_success = True
+
+                                href_ds.append([d,file_info_success,md5_success])
+                        if unreleased:
+                            debug("File Not Available For Manual Download Storing Canonical Link: %s" % d.href)
+                            filtered_downloads.append(d)
+                        elif file_info_success and md5_success:
+                            debug("Successfully fetched file info and md5 from %s" % d.href)
+                            filtered_downloads.append(d)
+                        else:
+                            any_file_info_success = False
+                            for href_d in href_ds:
+                                if not any_file_info_success:
+                                    if (href_d[1]) == True:
+                                        any_file_info_success = True
+                                        filtered_downloads.append(href_d[0])
+                                        warn("Successfully fetched file info from %s but no md5 data was available" % href_d[0].href)
+                            if not any_file_info_success:
+                                error("Could not fetch file info so using canonical link: %s" % href_ds[0][0].href)
+                                filtered_downloads.append(href_ds[0][0])
+
     out_list.extend(filtered_downloads)
 
 
@@ -1429,7 +1516,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession):
     out_list.extend(filtered_extras)
 
 
-def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
+def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,fallback_os=None):
     """filters any downloads/extras information against matching lang and os, translates
     them, and adds them to the item downloads/extras
 
@@ -1470,10 +1557,10 @@ def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession):
                         item.serials[potential_title] = pserial
                     else:
                         warn('DLC serial code is unprintable for %s, storing raw',potential_title)
-        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession)
-        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession)
+        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession,fallback_os)
+        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession,fallback_os)
         filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession)
-        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession)  # recursive
+        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession,fallback_os)  # recursive
         
 def deDuplicateList(duplicatedList,existingItems,strictDupe):   
     deDuplicatedList = []
@@ -1600,6 +1687,7 @@ def process_argv(argv):
     g1.add_argument('-strictextrasupdate',action="store_true",help="Marks extras for updating, even if size and name match,  if the last updated time has changed and MD5s are not available or do not match  ")
     g1.add_argument('-md5xmls',action="store_true",help="Downloads the MD5 XML files for each item (where available) and outputs them to " + MD5_DIR_NAME)
     g1.add_argument('-nochangelogs',action="store_true",help="Skips saving the changelogs for games")
+    g1.add_argument('-fallback-os', action='store', help='fallback operating system to use when main os not available', choices=VALID_OS_TYPES, default=None)
     g2 = g1.add_mutually_exclusive_group()
     g2.add_argument('-os', action=storeExtend, help='operating system(s)', nargs='*', default=[])
     g2.add_argument('-skipos', action='store', help='skip operating system(s)', nargs='*', default=[])  
@@ -1779,6 +1867,12 @@ def process_argv(argv):
         for os_type in args.os+args.skipos:  # validate the os type
             if os_type not in VALID_OS_TYPES:
                 error('error: specified os "%s" is not one of the valid os types %s' % (os_type, VALID_OS_TYPES))
+                raise SystemExit(1)
+
+        # validate fallback os if provided
+        if hasattr(args, 'fallback_os') and args.fallback_os:
+            if args.fallback_os not in VALID_OS_TYPES:
+                error('error: specified fallback os "%s" is not one of the valid os types %s' % (args.fallback_os, VALID_OS_TYPES))
                 raise SystemExit(1)
                 
     return args
@@ -1965,7 +2059,7 @@ def input_timeout(*ignore):
 
         
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,fallback_os,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs):
     media_type = GOG_MEDIA_TYPE_GAME
     items = []
     known_ids = []
@@ -2036,6 +2130,11 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         save_strictExtrasUpdate = strictExtrasUpdate
         save_md5xmls = md5xmls
         save_noChangeLogs = noChangeLogs
+        save_fallback_os = fallback_os
+        try:
+            fallback_os = resumeprops.get('fallback_os', None)
+        except KeyError:
+            fallback_os = None
         try:
             partial = resumeprops['partial']
         except KeyError:
@@ -2227,7 +2326,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     # fetch item details
     i = 0
     resumedb = sorted(items, key=lambda item: item.title)
-    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'noChangeLogs':noChangeLogs}
+    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'noChangeLogs':noChangeLogs,'fallback_os':fallback_os}
     resumedb.append(resumeprop)
     save_resume_manifest(resumedb)                    
     
@@ -2306,10 +2405,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                     except Exception:
                         item[key] = item_json_data[key]
             # parse json data for downloads/extras/dlcs
-            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession)
-            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession)                
+            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,fallback_os)
+            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,fallback_os)                
             filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession)
-            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession)
+            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,fallback_os)
             
             
             #Indepent Deduplication to make sure there are no doubles within galaxyDownloads or downloads to avoid weird stuff with the comprehention.
@@ -2372,7 +2471,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         info('resume completed')
         if (resumemode != 'onlyresume'):
             info('returning to specified download request...')
-            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs)
+            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_fallback_os,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs)
 
 
 def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipgalaxy,skipstandalone,skipshared,destructive):
@@ -4071,7 +4170,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)                
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.fallback_os,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]

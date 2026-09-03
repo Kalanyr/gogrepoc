@@ -1,3 +1,6 @@
+# **The fix for the rare manifest destruction defenct has now been merged to main. I recommend updating at your earliest conveniece. - Dated: 8 July 2026** 
+# **The issue of manifests that mix game entries that haven't been updated in a very long time with recent game entries being unable to be read should now be fixed. ** - Dated: 12 July 2026**
+
 gogrepo gamma
 --------------
 Python-based tool for downloading your GOG.com game collections and extras to your local computer for full offline enjoyment.
