@@ -1157,6 +1157,8 @@ def find_product_downlink(product_download_links, manual_url):
     if not product_download_links or not manual_url:
         return None
     path_parts = urlparse(manual_url).path.rstrip('/').split('/')
+    #info(path_parts)
+    #info(product_download_links)
     if len(path_parts) < 2:
         return None
     return product_download_links.get((path_parts[-2], path_parts[-1]))
@@ -1243,6 +1245,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
         file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
         if file_ext not in SKIP_MD5_FILE_EXT:
             try:
+                #warn(response.url)
                 api_downlink = d.gog_data.get('api_downlink')
                 query = parse_qs(urlparse(response.url).query)
                 uses_signed_prefix = all(key in query for key in ('wsSecret', 'wsTime', 'prefix'))
@@ -1254,36 +1257,53 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
                         product_api_context.download_links, d.get('manualUrl'))
                     if api_downlink:
                         d.gog_data.api_downlink = api_downlink
+                    else:
+                        product_id = urlparse(response.url).path.split("/")[4]
+                        type = d.get('manualUrl').split("/")[-1]
+                        if "installer" in type:
+                            api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/installer/" + type
+                        elif "patch" in type:
+                            api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/patch/" + type
+                        else:
+                            try:
+                                bonusID = int(type)
+                                api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/product_bonus/" + type
+                            except ValueError:
+                                pass
                 if api_downlink:
                     tmp_md5_url = fetch_checksum_url(updateSession, api_downlink)
                     if not tmp_md5_url:
+                        #Rewrite this to treat absence of checksum link at this point as authorative indicator that none exists
                         warn("no checksum URL found for {}".format(d.name))
                         tmp_md5_url = append_xml_extension_to_url_path(response.url)
                 else:
                     tmp_md5_url = append_xml_extension_to_url_path(response.url)
-                md5_response = request(updateSession,tmp_md5_url)
-                shelf_etree = xml.etree.ElementTree.fromstring(md5_response.content)
-                d.gog_data.md5_xml = AttrDict()
-                d.gog_data.md5_xml.tag = shelf_etree.tag
-                for key in shelf_etree.attrib.keys():
-                    d.gog_data.md5_xml[key] = shelf_etree.attrib.get(key)
-                if (save_md5_xml):    
-                    d.gog_data.md5_xml.text = md5_response.text
-                #d.gog_data.md5_xml.chunks = AttrDict()
-                #Too large need a better way to handle this
-                #for child in shelf_etree:
-                    #d.gog_data.md5_xml.chunks[child.attrib['id']] = AttrDict()
-                    #d.gog_data.md5_xml.chunks[child.attrib['id']].tag = child.tag
-                    #for key in child.attrib.keys():
-                    #    d.gog_data.md5_xml.chunks[child.attrib['id']][key] = child.attrib.get(key)
-                    #if len(child) != 0:
-                    #    warn('Unexpected MD5 Chunk Structure, please report to the maintainer')
-                d.md5 = shelf_etree.attrib['md5']
-                d.raw_updated = shelf_etree.attrib['timestamp']
-                if sys.version_info[0] < 3 :
-                    d.updated = dateutil.parser.isoparse(d.raw_updated).replace(tzinfo=pytz.utc).isoformat() #requires external modules
+                if api_downlink or not uses_signed_prefix:  #Only try to use the signed prefix path if we have a signature  
+                    md5_response = request(updateSession,tmp_md5_url)
+                    shelf_etree = xml.etree.ElementTree.fromstring(md5_response.content)
+                    d.gog_data.md5_xml = AttrDict()
+                    d.gog_data.md5_xml.tag = shelf_etree.tag
+                    for key in shelf_etree.attrib.keys():
+                        d.gog_data.md5_xml[key] = shelf_etree.attrib.get(key)
+                    if (save_md5_xml):    
+                        d.gog_data.md5_xml.text = md5_response.text
+                    #d.gog_data.md5_xml.chunks = AttrDict()
+                    #Too large need a better way to handle this
+                    #for child in shelf_etree:
+                        #d.gog_data.md5_xml.chunks[child.attrib['id']] = AttrDict()
+                        #d.gog_data.md5_xml.chunks[child.attrib['id']].tag = child.tag
+                        #for key in child.attrib.keys():
+                        #    d.gog_data.md5_xml.chunks[child.attrib['id']][key] = child.attrib.get(key)
+                        #if len(child) != 0:
+                        #    warn('Unexpected MD5 Chunk Structure, please report to the maintainer')
+                    d.md5 = shelf_etree.attrib['md5']
+                    d.raw_updated = shelf_etree.attrib['timestamp']
+                    if sys.version_info[0] < 3 :
+                        d.updated = dateutil.parser.isoparse(d.raw_updated).replace(tzinfo=pytz.utc).isoformat() #requires external modules
+                    else:
+                        d.updated = datetime.datetime.fromisoformat(d.raw_updated).replace(tzinfo=datetime.timezone.utc).isoformat() #Standardize #Only valid after 3.7 or maybe 3.11 ? #Assumes that timezone is UTC (might actually be GMT +2 (Poland) but even if so UTC is a far more consistent approximation than local time for most of the world)
                 else:
-                    d.updated = datetime.datetime.fromisoformat(d.raw_updated).replace(tzinfo=datetime.timezone.utc).isoformat() #Standardize #Only valid after 3.7 or maybe 3.11 ? #Assumes that timezone is UTC (might actually be GMT +2 (Poland) but even if so UTC is a far more consistent approximation than local time for most of the world)
+                    warn("signed prefix required to fetch checksum data for {} but secret cannot be retrieved".format(d.name))
             except requests.HTTPError as e:
                 if e.response.status_code == 404:
                     warn("no md5 data found for {}".format(d.name))
@@ -1341,7 +1361,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                         tempd = download['manualUrl']
                         if tempd[:10] == "/downloads":
                             tempd = "/downlink" +tempd[10:]
-                        hrefs = [GOG_HOME_URL + download['manualUrl'],GOG_HOME_URL + tempd]
+                        hrefs = [GOG_HOME_URL + download['manualUrl']] #GOG_HOME_URL + tempd (this seem to be obsolete and always return forbidden)
                         href_ds = []
                         file_info_success = False
                         md5_success = False
@@ -1432,7 +1452,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
         tempd = extra['manualUrl']
         if tempd[:10] == "/downloads":
             tempd = "/downlink" +tempd[10:]
-        hrefs = [GOG_HOME_URL + extra['manualUrl'],GOG_HOME_URL + tempd]
+        hrefs = [GOG_HOME_URL + extra['manualUrl']] #GOG_HOME_URL + tempd (this seem to be obsolete and always return forbidden)
         href_ds = []
         file_info_success = False
         unreleased = False
