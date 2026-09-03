@@ -1251,7 +1251,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
                         product_api_context.download_links = fetch_product_download_links(
                             updateSession, product_api_context.product_id)
                     api_downlink = find_product_downlink(
-                        product_api_context.download_links, d.gog_data.get('manualUrl'))
+                        product_api_context.download_links, d.get('manualUrl'))
                     if api_downlink:
                         d.gog_data.api_downlink = api_downlink
                 if api_downlink:
