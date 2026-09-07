@@ -284,8 +284,7 @@ token_lock = threading.RLock()
 WINDOWS_PREALLOCATION_FS = ["NTFS","exFAT","FAT32"]
 POSIX_PREALLOCATION_FS = ["exfat","vfat","ntfs","btrfs", "ext4", "ocfs2", "xfs"] #May need to exempt NTFS because of reported hangs on remote drives, but should check if that's because of NFS or similar first
 
-#Generates diagnositc data for script maintenance ( eg a list of available languages in your collection or how) or technical reports to GOG ( eg a list of files missing from Galaxy Extras or links that do not have MD5s)
-DIAGNOSTIC_DATA = False
+
 
 #request wrapper 
 def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None):
@@ -1296,7 +1295,7 @@ def fetch_chunk_tree(response, session, api_downlink=None):
             return None 
     return None
 
-def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=None):
+def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=None,diagnostic=False):
    # fetch file name/size
     #try:
     response= request_head(updateSession,d.href)
@@ -1320,7 +1319,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
     if fetch_md5:
         file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
         skip_md5_file_ext = SKIP_MD5_FILE_EXT
-        if DIAGNOSTIC_DATA:
+        if diagnostic:
             skip_md5_file_ext = []
         if file_ext not in skip_md5_file_ext:
             try:
@@ -1438,7 +1437,7 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
         else:
             d.updated = email.utils.parsedate_to_datetime(d.raw_updated).isoformat() #Standardize
 
-def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None):
+def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None,diagnostic=False):
     """filters any downloads information against matching lang and os, translates
     them, and extends them into out_list
     """
@@ -1506,7 +1505,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                         #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                                         #    w.write(str(head_response.headers))
                                         #shelf_head.etree = xml.etree.ElementTree.fromstring(head_response.content)
-                                        fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context)
+                                        fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context,diagnostic)
                                         file_info_success = True
                                     except requests.HTTPError as e:
                                         warn("failed to fetch %s" % (d.href))
@@ -1548,7 +1547,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
     out_list.extend(filtered_downloads)
 
 
-def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_context=None):
+def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_context=None,diagnostic=False):
     """filters and translates extras information and adds them into out_list
     """
     filtered_extras = []
@@ -1601,11 +1600,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
                         #head_response = request_head(updateSession,d.href)
                         #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                         #    w.write(str(head_response.headers))
-                        if (False): #Going to try checking Extras for MD5s and do exemptions by file type rather than assuming extras don't have MD5s.
-                            fetch_file_info(d, False,save_md5_xml,updateSession)
-                        else:
-                            fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context)
-                            
+                        fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context,diagnostic)                            
                         file_info_success = True
                     except requests.HTTPError as e:
                         warn("failed to fetch %s" % d.href)
@@ -1645,7 +1640,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
     out_list.extend(filtered_extras)
 
 
-def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None):
+def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,product_api_context=None,diagnostic=False):
     """filters any downloads/extras information against matching lang and os, translates
     them, and adds them to the item downloads/extras
 
@@ -1693,10 +1688,10 @@ def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,pr
                 available_os_types[available_lang] =  list(downloads_dict[available_lang].keys())
         item.available_langs[potential_title] = available_langs
         item.available_os_types[potential_title] = available_os_types
-        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
-        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
-        filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession,product_api_context)
-        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)  # recursive
+        filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context,diagnostic)
+        filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context,diagnostic)
+        filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession,product_api_context,diagnostic)
+        filter_dlcs(item, dlc_dict['dlcs'], lang_list, os_list,save_md5_xml,updateSession,product_api_context,diagnostic)  # recursive
         
 def deDuplicateList(duplicatedList,existingItems,strictDupe):   
     deDuplicatedList = []
@@ -1841,6 +1836,7 @@ def process_argv(argv):
     g5.add_argument('-skipids', action='store', help='id(s)/titles(s) of (a) specific game(s) not to update', nargs='*', default=[])
     g1.add_argument('-wait', action='store', type=float,
                     help='wait this long in hours before starting', default=0.0)  # sleep in hr
+    g1.add_argument('-diagnostic', action='store_true', help = "More exhaustively probes GOG for data in preparation for the diagnostics command. This causes slower updates and will generate more warning messages. ")
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
                     
@@ -1985,6 +1981,8 @@ def process_argv(argv):
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
 
     g1 = sp1.add_parser('diagnostics', help='Outputs diagnostic data for script maintenance & reports, only fully works if data is properly generated by appropriate update')    
+    g1.add_argument('-verbose', action='store_true', help = 'Outputs additional data that is not usually useful ( eg things behaving in a way that is expecteced if not optimal )')
+
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
     
@@ -2198,7 +2196,7 @@ def input_timeout(*ignore):
 
         
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic):
     media_type = GOG_MEDIA_TYPE_GAME
     items = []
     known_ids = []
@@ -2269,6 +2267,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         save_strictExtrasUpdate = strictExtrasUpdate
         save_md5xmls = md5xmls
         save_noChangeLogs = noChangeLogs
+        save_diagnostic = diagnostic
         try:
             partial = resumeprops['partial']
         except KeyError:
@@ -2301,6 +2300,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             noChangeLogs = resumeprops['noChangeLogs']
         except KeyError:
             noChangeLogs = False            
+        try:
+            diagnostic = resumeprops['diagnostic']
+        except KeyError:
+            diagnostic = False            
             
         items = resumedb
         items_count = len(items)
@@ -2460,7 +2463,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     # fetch item details
     i = 0
     resumedb = sorted(items, key=lambda item: item.title)
-    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'noChangeLogs':noChangeLogs}
+    resumeprop = {'resume_manifest_syntax_version':RESUME_MANIFEST_SYNTAX_VERSION,'os_list':os_list,'lang_list':lang_list,'installers':installers,'strict':strict,'complete':False,'skipknown':skipknown,'partial':partial,'updateonly':updateonly,'strictDupe':strictDupe,'strictDownloadsUpdate':strictDownloadsUpdate,'strictExtrasUpdate':strictExtrasUpdate,'md5xmls':md5xmls,'noChangeLogs':noChangeLogs,'diagnostic':diagnostic}
     resumedb.append(resumeprop)
     save_resume_manifest(resumedb)                    
     
@@ -2549,10 +2552,10 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             item.available_langs[item.long_title] = available_langs
             item.available_os_types = AttrDict()
             item.available_os_types[item.long_title] = available_os_types
-            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
-            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
-            filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession,product_api_context)
-            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,product_api_context)
+            filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic)
+            filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic)
+            filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession,product_api_context,diagnostic)
+            filter_dlcs(item, item_json_data['dlcs'], lang_list, os_list,md5xmls,updateSession,product_api_context,diagnostic)
             
             
             #Indepent Deduplication to make sure there are no doubles within galaxyDownloads or downloads to avoid weird stuff with the comprehention.
@@ -2617,22 +2620,26 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             info('returning to specified download request...')
             cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs)
 
-def cmd_output_diagnostic_data():
+def cmd_output_diagnostic_data(verbose):
     gamesdb = load_manifest()
-    output_diagnostic_data(gamesdb)
+    output_diagnostic_data(gamesdb,verbose)
 
-def output_diagnostic_data(sorted_gamesdb):
+def output_diagnostic_data(sorted_gamesdb,verbose=False):
     known_languages = sorted(list(LANG_TABLE.values()))
 
     used_languages = []
     missing_galaxy_items = {}
-    missing_md5s = {}
+    missing_md5s_expected = {}
+    missing_md5s_unexpected = {}
+    md5s_unexpected = {}
     extension_md5_count = {}
     extension_missing_md5_count = {}
     broken_links = {}
     strange_items = {}    
     for game in sorted_gamesdb:
-        game_missing_md5s = {}
+        game_missing_md5s_expected = {}
+        game_missing_md5s_unexpected = {}
+        game_md5s_unexpected = {}
         game_missing_galaxy_items = {}
         game_broken_links = []
         game_strange_items = {}
@@ -2640,8 +2647,7 @@ def output_diagnostic_data(sorted_gamesdb):
             used_languages = list(set(used_languages + game.available_langs[sub_item]))
             for used_language in game.available_langs[sub_item]:
                 if not ( used_language in known_languages):
-                    info("Unknown language in manifest: " + used_language + " in game " + str(game.id))
-                        
+                    info("Unknown language in manifest: " + used_language + " in game " + str(game.id) + " : " + game.title)
         for download in game.downloads + game.extras:
             if download.name:
                 extension = os.path.splitext(download.name)[1].lower()
@@ -2654,31 +2660,89 @@ def output_diagnostic_data(sorted_gamesdb):
                     if not download.gog_data.get('api_downlink'):
                         game_strange_items[download.name] = download.manualUrl
                 if not download.md5:
-                    game_missing_md5s[download.name] = (download.manualUrl,extension in SKIP_MD5_FILE_EXT)
+                    if extension in SKIP_MD5_FILE_EXT:
+                        game_missing_md5s_expected[download.name] = download.manualUrl
+                    else:   
+                        game_missing_md5s_unexpected[download.name] = download.manualUrl
                     extension_missing_md5_count[extension] += 1
                 else:
-                    if extension == ".zip":
-                        info("Zip with MD5 is " + download.name + " in " + game.slug )
+                    if extension in SKIP_MD5_FILE_EXT:
+                        game_md5s_unexpected[download.name] = download.manualUrl 
                     extension_md5_count[extension] += 1
             elif not download.unreleased:
                 game_broken_links.append((download.get('provisional_name'),download.manualUrl))
         if game_missing_galaxy_items:
             missing_galaxy_items[game.id] = (game.title,game_missing_galaxy_items)
-        if game_missing_md5s:
-            missing_md5s[game.id] = (game.title,game_missing_md5s)
+        if game_missing_md5s_expected:
+            missing_md5s_expected[game.id] = (game.title,game_missing_md5s_expected)
+        if game_missing_md5s_unexpected:
+            missing_md5s_unexpected[game.id] = (game.title,game_missing_md5s_unexpected)
+        if game_md5s_unexpected:
+            md5s_unexpected[game.id] = (game.title,game_md5s_unexpected)
         if game_broken_links:
             broken_links[game.id] = (game.title,game_broken_links)
         if game_strange_items:
             strange_items[game.id] = (game.title,game_strange_items)
+    info('--')                    
     used_languages = sorted(used_languages)
-    info('Missing Galaxy Items: ' + str(missing_galaxy_items))
-    info('Missing MD5s: ' + str(missing_md5s))
-    info('Broken Links: ' + str(broken_links))
-    info('Obscured Product IDs: ' +  str(strange_items))
+    info('Languages used in your manifest:' + str(used_languages))
+    info('--')                
+    if missing_galaxy_items:
+        info("The following items are available to download on the GOG website but not the Galaxy Extras tab")
+        for game_id in missing_galaxy_items:
+            title, items = missing_galaxy_items[game_id]
+            info("  From game: " +  title + " : " + str(game_id))
+            for item_name in items:
+                info("    " +  items[item_name] + " : " + item_name)
+        info('--')                
+
+    if strange_items:
+        info("The following items are available to download on the GOG website but not the Galaxy Extras tab and cannot generate a fallback Galaxy API link because the fully resolved website download URL does not include the (sub)-product ID")
+        for game_id in strange_items:
+            title, items = strange_items[game_id]
+            info("  From game: " +  title + " : " + str(game_id))
+            for item_name in items:
+                info("    " +  items[item_name] + " : " + item_name)
+        info('--')                
+
+    if broken_links:
+        info("The following items are (theoretically) available to download on the GOG website but have broken links that stop them being downloaded")
+        for game_id in broken_links:
+            title, items = broken_links[game_id]
+            info("  From game: " +  title + " : " + str(game_id))
+            for (provisional_name,manualURL) in items:
+                info("    " +  manualURL + " : " + provisional_name)
+        info('--')                
+    if md5s_unexpected:
+        info("The following items unexpectedly for their type have MD5s available:")
+        for game_id in md5s_unexpected:
+            title, items = md5s_unexpected[game_id]
+            info("  From game: " +  title + " : " + str(game_id))
+            for item_name in items:
+                info("    " +  items[item_name] + " : " + item_name)
+        info('--')                
+    if missing_md5s_unexpected:    
+        info("The following item unexpectedly for their type do not have MD5s available")
+        for game_id in missing_md5s_unexpected:
+            title, items =missing_md5s_unexpected[game_id]
+            
+            info("  From game: " +  title + " : " + str(game_id))
+            for item_name in items:
+                    info("    " +  items[item_name] + " : " + item_name)
+        info('--')                
+
+    if verbose and missing_md5s_expected:    
+        info("The following item expectedly for their type do not have MD5s available")
+        for game_id in missing_md5s_expected:
+            title, items =missing_md5s_expected[game_id]
+            
+            info("  From game: " +  title + " : " + str(game_id))
+            for item_name in items:
+                    info("    " +  items[item_name] + " : " + item_name)
+        info('--')                 
     info('Extension MD5 count:' + str(extension_md5_count)) 
     info('Extension Missing MD5 count:' + str(extension_missing_md5_count)) 
-    info('Languages used in your manifest:' + str(used_languages))
-
+ 
     
 
 def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipgalaxy,skipstandalone,skipshared,destructive):
@@ -4460,7 +4524,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)                
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]
@@ -4552,7 +4616,7 @@ def main(args):
             args.installers = True
         cmd_trash(args.gamedir,args.installers,args.images,args.folders,args.relaxed,args.dryrun)
     elif args.command == "diagnostics":
-        cmd_output_diagnostic_data()
+        cmd_output_diagnostic_data(args.verbose)
         
     etime = datetime.datetime.now()
     info('--')
