@@ -45,6 +45,9 @@ from fnmatch import fnmatch
 import email.utils
 import signal
 import psutil
+import glob
+import tempfile
+import errno
 minPy2 = [2,7]
 minPy3 = [3,10]
 specialPy3=[3,8]
@@ -122,7 +125,7 @@ logFormatter = logging.Formatter("%(asctime)s | %(message)s", datefmt='%H:%M:%S'
 rootLogger = logging.getLogger('ws')
 rootLogger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler(sys.stdout)
-loggingHandler = logging.handlers.RotatingFileHandler('gogrepo.log', mode='a+', maxBytes = 1024*1024*LOG_MAX_MB , backupCount = LOG_BACKUPS,  encoding=None, delay=True)
+loggingHandler = logging.handlers.RotatingFileHandler('gogrepo.log', mode='a+', maxBytes = 1024*1024*LOG_MAX_MB , backupCount = LOG_BACKUPS,  encoding='utf-8', delay=True)
 loggingHandler.setFormatter(logFormatter)
 consoleHandler.setFormatter(logFormatter)
 rootLogger.addHandler(consoleHandler)
@@ -204,12 +207,16 @@ LANG_TABLE = {'en': u'English',   # English
               'de': u'Deutsch',         # German
               'da': u'Dansk',           # Danish
               'sv': u'svenska',         # Swedish
-              'fi': u'Suomi',           # Finnish
+              'fi': u'suomi',           # Finnish
               'no': u'norsk',           # Norsk
               'cn': u'\u4e2d\u6587(\u7b80\u4f53)', #Chinese (Simplified)
               'zh': u'\u4e2d\u6587(\u7e41\u9ad4)', #Chinese (Traditional)
               'cno' : u'\u4e2d\u6587',            # Chinese (Original before Simplified/Traditional Split )
-              'es_mx' : u'Espa\u00f1ol (AL)'
+              'es_mx' : u'Espa\u00f1ol (AL)',  # Spanish (Latin American)
+              'th': u'\u0e44\u0e17\u0e22', #Thai
+              'uk': u'y\u043a\u0440\u0430\u0457\u043d\u0441\u044c\u043a\u0430', #Ukranian
+              'he': u'\u05e2\u05d1\u05e8\u05d9\u05ea' #Hebrew
+              
               }
 
 VALID_OS_TYPES = ['windows', 'linux', 'mac']
@@ -251,7 +258,7 @@ DEFAULT_LANG_LIST = [sysLang]
 #    DEFAULT_LANG_LIST.push(DEFAULT_FALLBACK_LANG)
 
 # These file types don't have md5 data from GOG
-SKIP_MD5_FILE_EXT = ['.txt', '.zip',''] #Removed tar.gz as it can have md5s and is actually parsed as .gz so wasn't working
+SKIP_MD5_FILE_EXT = ['.txt','.zip','.jpg','.pdf','.png','.rar','.mp4'] #Removed tar.gz as it can have md5s and is actually parsed as .gz so wasn't working, Removed '' as some data files do now have MD5s and this is a wortwhile tradeoff, Left .zip despite a very small number having MD5s as most don't and we verify zip correctness anyway
 for i in range(1,21):
     n = i
     a = "." + "%03d"%n
@@ -276,6 +283,10 @@ token_lock = threading.RLock()
 
 WINDOWS_PREALLOCATION_FS = ["NTFS","exFAT","FAT32"]
 POSIX_PREALLOCATION_FS = ["exfat","vfat","ntfs","btrfs", "ext4", "ocfs2", "xfs"] #May need to exempt NTFS because of reported hangs on remote drives, but should check if that's because of NFS or similar first
+
+#Generates diagnositc data for script maintenance ( eg a list of available languages in your collection or how) or technical reports to GOG ( eg a list of files missing from Galaxy Extras or links that do not have MD5s)
+DIAGNOSTIC_DATA = False
+
 #request wrapper 
 def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None):
     """Performs web request to url with optional retries, delay, and byte range.
@@ -612,6 +623,7 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                         # dir is valid game folder, check its files
                         expected_dirnames = []
                         expected_dirnames.append("downloads")
+                        expected_dirnames.append("extras")
                         for cur_dir_file in os.listdir(cur_fulldir):
                             if os.path.isdir(os.path.join(MD5_DIR_NAME, cur_dir, cur_dir_file)):
                                 if cur_dir_file not in expected_dirnames:
@@ -619,53 +631,75 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                     shutil.rmtree(os.path.join(MD5_DIR_NAME, cur_dir, cur_dir_file)) 
                                 else:
                                     cur_fulldir2 = os.path.join(MD5_DIR_NAME, cur_dir,cur_dir_file)
-                                    os_types = []
-                                    for game_item in all_items_by_title[cur_dir].downloads:
-                                        if game_item.os_type not in os_types:
-                                            os_types.append(game_item.os_type)
-                                    for cur_dir_file in os.listdir(cur_fulldir2):
-                                        if os.path.isdir(os.path.join(cur_fulldir2,cur_dir_file)):
-                                            if cur_dir_file not in os_types:
-                                                info("Removing incorrect subdirectory " + os.path.join(cur_fulldir2,cur_dir_file))
-                                                shutil.rmtree(os.path.join(cur_fulldir2, cur_dir_file)) 
-                                            else:
-                                                cur_fulldir3 = os.path.join(cur_fulldir2,cur_dir_file)
-                                                os_game_items = [x for x in all_items_by_title[cur_dir].downloads if x.os_type == cur_dir_file]
-                                                for game_item in os_game_items:
-                                                    langs = []
+                                    if cur_dir_file == "downloads":
+                                        os_types = []
+                                        for game_item in all_items_by_title[cur_dir].downloads:
+                                            if game_item.os_type not in os_types:
+                                                os_types.append(game_item.os_type)
+                                        for cur_dir_file in os.listdir(cur_fulldir2):
+                                            if os.path.isdir(os.path.join(cur_fulldir2,cur_dir_file)):
+                                                if cur_dir_file not in os_types:
+                                                    info("Removing incorrect subdirectory " + os.path.join(cur_fulldir2,cur_dir_file))
+                                                    shutil.rmtree(os.path.join(cur_fulldir2, cur_dir_file)) 
+                                                else:
+                                                    cur_fulldir3 = os.path.join(cur_fulldir2,cur_dir_file)
+                                                    os_game_items = [x for x in all_items_by_title[cur_dir].downloads if x.os_type == cur_dir_file]
                                                     for game_item in os_game_items:
-                                                        if game_item.lang not in langs:
-                                                            langs.append(game_item.lang)
-                                                for cur_dir_file in os.listdir(cur_fulldir3):
-                                                    if os.path.isdir(os.path.join(cur_fulldir3,cur_dir_file)):
-                                                        if cur_dir_file not in langs:
-                                                            info("Removing incorrect subdirectory " + os.path.join(cur_fulldir3,cur_dir_file))
-                                                            shutil.rmtree(os.path.join(cur_fulldir3, cur_dir_file)) 
-                                                        else:
-                                                            cur_fulldir4 = os.path.join(cur_fulldir3,cur_dir_file)
-                                                            lang_os_game_items = [x for x in os_game_items if x.lang == cur_dir_file]
-                                                            expected_filenames = []
-                                                            for game_item in lang_os_game_items:
-                                                                if ( game_item.name is None ):
-                                                                    warn("Game item has OS and Lang but no name in game associated with " + cur_fulldir4)
-                                                                if ( game_item.name is not None ):
-                                                                    expected_filenames.append(game_item.name + ".xml")                                                                
-                                                            for cur_dir_file in os.listdir(cur_fulldir4):
-                                                                
+                                                        langs = []
+                                                        for game_item in os_game_items:
+                                                            if game_item.lang not in langs:
+                                                                langs.append(game_item.lang)
+                                                    for cur_dir_file in os.listdir(cur_fulldir3):
+                                                        if os.path.isdir(os.path.join(cur_fulldir3,cur_dir_file)):
+                                                            if cur_dir_file not in langs:
+                                                                info("Removing incorrect subdirectory " + os.path.join(cur_fulldir3,cur_dir_file))
+                                                                shutil.rmtree(os.path.join(cur_fulldir3, cur_dir_file)) 
+                                                            else:
+                                                                cur_fulldir4 = os.path.join(cur_fulldir3,cur_dir_file)
+                                                                lang_os_game_items = [x for x in os_game_items if x.lang == cur_dir_file]
+                                                                expected_filenames = []
+                                                                for game_item in lang_os_game_items:
+                                                                    if ( game_item.name is None ):
+                                                                        warn("Game item has OS and Lang but no name in game associated with " + cur_fulldir4)
+                                                                        if game_item.provisional_name:
+                                                                            warn("This was due to a failure to fetch file info: the provisional name of item was: " + game_item.provisional_name + " from " + game_item.manualUrl)
+                                                                    if ( game_item.name is not None ):
+                                                                        expected_filenames.append(game_item.name + ".xml")                                                                
                                                                 for cur_dir_file in os.listdir(cur_fulldir4):
-                                                                    if os.path.isdir(os.path.join(cur_fulldir4, cur_dir_file)):
-                                                                        info("Removing subdirectory(?!) " + os.path.join(downloadingdir, cur_dir, cur_dir_file))                    
-                                                                        shutil.rmtree(os.path.join(cur_fulldir4, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
-                                                                    else: 
-                                                                        if cur_dir_file not in expected_filenames:
-                                                                            info("Removing outdated file " + os.path.join(cur_fulldir4, cur_dir_file))    
-                                                                            os.remove(os.path.join(cur_fulldir4, cur_dir_file))
-                                                    else:
-                                                        info("Removing invalid file " + os.path.join(cur_fulldir3, cur_dir_file))
-                                                        os.remove(os.path.join(cur_fulldir3, cur_dir_file))
-                                        else:
-                                            info("Removing invalid file " + os.path.join(cur_fulldir2, cur_dir_file))
-                                            os.remove(os.path.join(cur_fulldir2, cur_dir_file))
+                                                                    
+                                                                    for cur_dir_file in os.listdir(cur_fulldir4):
+                                                                        if os.path.isdir(os.path.join(cur_fulldir4, cur_dir_file)):
+                                                                            info("Removing subdirectory(?!) " + os.path.join(cur_fulldir4, cur_dir_file))                    
+                                                                            shutil.rmtree(os.path.join(cur_fulldir4, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
+                                                                        else: 
+                                                                            if cur_dir_file not in expected_filenames:
+                                                                                info("Removing outdated file " + os.path.join(cur_fulldir4, cur_dir_file))    
+                                                                                os.remove(os.path.join(cur_fulldir4, cur_dir_file))
+                                                        else:
+                                                            info("Removing invalid file " + os.path.join(cur_fulldir3, cur_dir_file))
+                                                            os.remove(os.path.join(cur_fulldir3, cur_dir_file))
+                                            else:
+                                                info("Removing invalid file " + os.path.join(cur_fulldir2, cur_dir_file))
+                                                os.remove(os.path.join(cur_fulldir2, cur_dir_file))
+                                    elif cur_dir_file== "extras":
+                                        expected_filenames = []
+                                        for extra_item in all_items_by_title[cur_dir].extras:
+                                            if (extra_item.name is None):
+                                                    if not extra_item.unreleased:
+                                                        warn("Extra item that is probably released but has no name in extra associated with " + cur_fulldir2)
+                                                        if extra_item.provisional_name:
+                                                            warn("This was probably due to a failure to fetch file info: the provisional name of item was: " + extra_item.provisional_name + " from " + extra_item.manualUrl)
+                                            if (extra_item.name is not None): 
+                                                expected_filenames.append(extra_item.name + ".xml")
+                                            
+                                        for cur_dir_file in os.listdir(cur_fulldir2):
+                                            if os.path.isdir(os.path.join(cur_fulldir2, cur_dir_file)):
+                                                info("Removing subdirectory(?!) " + os.path.join(cur_fulldir2, cur_dir_file))                  
+                                                shutil.rmtree(os.path.join(cur_fulldir2, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
+                                            else: 
+                                                if cur_dir_file not in expected_filenames:
+                                                    info("Removing outdated file " + os.path.join(cur_fulldir2, cur_dir_file))    
+                                                    os.remove(os.path.join(cur_fulldir2, cur_dir_file))
                             else:                            
                                 info("Removing invalid file " + os.path.join(MD5_DIR_NAME, cur_dir, cur_dir_file))    
                                 os.remove(os.path.join(MD5_DIR_NAME,cur_dir, cur_dir_file))
@@ -691,6 +725,8 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                         text = download.gog_data.md5_xml.text
                         if text is not None and text != "":
                             warn("Download item with MD5 XML Data but without a filename exists in manifest")
+                            if download.provisional_name:
+                                warn("It should not be possible to have XML Data without a filename but with a provisional name but since you do, the provisional name of item was: " +  download.provisional_name + " from " + download.manualUrl)
                     except AttributeError:
                         pass
                 if (download.name is not None):
@@ -706,7 +742,34 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                             del download.gog_data.md5_xml["text"]
                     except AttributeError:
                         pass
-            #all_md5s = glob.glob()   Can't recursive glob before 3.5 so have to do this the hardway     
+            for extra in item.extras:
+                ffdir = os.path.join(fname,'extras')
+                if not os.path.isdir(ffdir):
+                    os.makedirs(ffdir)
+                if (extra.name is None):
+                    try:
+                        text = extra.gog_data.md5_xml.text
+                        if text is not None and text != "":
+                            warn("Extra item with MD5 XML Data but without a filename exists in manifest")
+                            if extra.provisional_name:
+                                warn("It should not be possible to have XML Data without a filename but with a provisional name but since you do, the provisional name of item was: " +  extra.provisional_name + " from " + extra.manualUrl)
+                    except AttributeError:
+                        pass
+                if (extra.name is not None):
+                    ffname = os.path.join(ffdir,extra.name + ".xml")
+                    #rffname = os.path.join(".",ffname)
+                    try:
+                        text = extra.gog_data.md5_xml.text
+                        #existing_md5s.append(ffname)
+                        if (update_md5_xml):
+                            with ConditionalWriter(ffname) as fd_xml:
+                                fd_xml.write(text)
+                        if (delete_md5_xml):
+                            del extra.gog_data.md5_xml["text"]
+                    except AttributeError:
+                        pass
+  
+ #all_md5s = glob.glob()   Can't recursive glob before 3.5 so have to do this the hardway     
                     
     save_manifest_core(items,filepath)
 
@@ -816,11 +879,16 @@ def test_zipfile(filename):
     """Opens filename and tests the file for ZIP integrity.  Returns True if
     zipfile passes the integrity test, False otherwise.
     """
+    if sys.version_info[0] > 3 or (sys.version_info[0] == 3 and sys.version_info[1] >= 2):
+        badZipException = zipfile.BadZipFile
+    else:
+        badZipException = zipfile.BadZipfile
+
     try:
         with zipfile.ZipFile(filename, 'r') as f:
             if f.testzip() is None:
                 return True
-    except (zipfile.BadZipfile,zlib.error):
+    except (badZipException,zlib.error) as e:
         return False
     return False
 
@@ -1053,7 +1121,7 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
         candidate = None
         for oldExtra in olditem.extras:                    
             if (oldExtra.md5 != None):                
-                if oldExtra.md5 == oldExtra.md5 and oldExtra.size == newExtra.size:
+                if oldExtra.md5 == newExtra.md5 and oldExtra.size == newExtra.size:
                     if oldExtra.name == newExtra.name:
                         candidate = oldExtra #Match already exists
                         break #Can't be overriden so end it now
@@ -1157,8 +1225,6 @@ def find_product_downlink(product_download_links, manual_url):
     if not product_download_links or not manual_url:
         return None
     path_parts = urlparse(manual_url).path.rstrip('/').split('/')
-    #info(path_parts)
-    #info(product_download_links)
     if len(path_parts) < 2:
         return None
     return product_download_links.get((path_parts[-2], path_parts[-1]))
@@ -1172,6 +1238,7 @@ def fetch_checksum_url(session, api_downlink):
 
 
 def fetch_chunk_tree(response, session, api_downlink=None):
+    chunk_url = None
     file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
     if file_ext not in SKIP_MD5_FILE_EXT:
         try:
@@ -1183,11 +1250,20 @@ def fetch_chunk_tree(response, session, api_downlink=None):
                     return None
             else:
                 # Backwards compatibility for manifests made before api_downlink was stored.
-                chunk_url = append_xml_extension_to_url_path(response.url)
+                query = parse_qs(urlparse(response.url).query)
+                uses_signed_prefix = all(key in query for key in ('wsSecret', 'wsTime', 'prefix'))
+                if not uses_signed_prefix:
+                    chunk_url = append_xml_extension_to_url_path(response.url)
+                else:
+                    warn("signed prefix required to fetch checksum data for {} but secret could not be retrieved".format(d.name))
+                    return None
             chunk_response = request(session,chunk_url)
             shelf_etree = xml.etree.ElementTree.fromstring(chunk_response.content)
             return  shelf_etree
         except requests.HTTPError as e:
+            if not chunk_url:                   
+                chunk_url = unquote(urlparse(response.url).path.split('/')[-1])
+                warn("invalid downlink found for {}".format(chunk_url) + " . Leading to ")
             if e.response.status_code == 404:
                 warn("no md5 data found for {}".format(chunk_url))
             else:
@@ -1243,7 +1319,10 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
     # fetch file md5
     if fetch_md5:
         file_ext = os.path.splitext(urlparse(response.url).path)[1].lower()
-        if file_ext not in SKIP_MD5_FILE_EXT:
+        skip_md5_file_ext = SKIP_MD5_FILE_EXT
+        if DIAGNOSTIC_DATA:
+            skip_md5_file_ext = []
+        if file_ext not in skip_md5_file_ext:
             try:
                 #warn(response.url)
                 api_downlink = d.gog_data.get('api_downlink')
@@ -1258,22 +1337,41 @@ def fetch_file_info(d, fetch_md5,save_md5_xml,updateSession,product_api_context=
                     if api_downlink:
                         d.gog_data.api_downlink = api_downlink
                     else:
-                        product_id = urlparse(response.url).path.split("/")[4]
-                        type = d.get('manualUrl').split("/")[-1]
-                        if "installer" in type:
-                            api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/installer/" + type
-                        elif "patch" in type:
-                            api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/patch/" + type
-                        else:
-                            try:
-                                bonusID = int(type)
-                                api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/product_bonus/" + type
-                            except ValueError:
-                                pass
+                        d.gog_data.api_downlink_fallback = True
+                        try:
+                            #We don't use root_product_id but sense checking it helps validate that we haven't just coincidentally hit a number on a link of the wrong form. 
+                            root_product_id = urlparse(response.url).path.split("/")[3]
+                            product_id = urlparse(response.url).path.split("/")[4]
+                        except IndexError:
+                            root_product_id = ''
+                            product_id = ''
+                        validProductID = False
+                        try:
+                            #sense check
+                            _ = int(root_product_id)
+                            _ = int(product_id)
+                            validProductID = True
+                        except ValueError:
+                            warn('Could not extract product ID from URL:' + response.url + " . Abandoning attempt to generate Galaxy API Link for %s" % (d.href))
+                        if (validProductID):                                
+                            type = d.get('manualUrl').split("/")[-1]
+                            if "installer" in type:
+                                api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/installer/" + type
+                            elif "patch" in type:
+                                api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/patch/" + type
+                            else:
+                                try:
+                                    bonusID = int(type)
+                                    api_downlink = "https://api.gog.com/products/"+product_id+"/downlink/product_bonus/" + type
+                                except ValueError:
+                                    pass
+                            if api_downlink:
+                                d.gog_data.api_downlink = api_downlink
                 if api_downlink:
                     tmp_md5_url = fetch_checksum_url(updateSession, api_downlink)
                     if not tmp_md5_url:
                         #Rewrite this to treat absence of checksum link at this point as authorative indicator that none exists
+                        #Not possible, GOG has a checksum endpoint for all files, even ones where no XML has ever existed.
                         warn("no checksum URL found for {}".format(d.name))
                         tmp_md5_url = append_xml_extension_to_url_path(response.url)
                 else:
@@ -1410,8 +1508,15 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                         #shelf_head.etree = xml.etree.ElementTree.fromstring(head_response.content)
                                         fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context)
                                         file_info_success = True
-                                    except requests.HTTPError:
+                                    except requests.HTTPError as e:
                                         warn("failed to fetch %s" % (d.href))
+                                        try:
+                                            d.provisional_name = unquote(urlparse(e.response.url).path.split('/')[-1])
+                                        except Exception:   
+                                            warn("failed to generate provisional name")
+                                            warn("The handled exception was:")
+                                            log_exception('')
+                                            warn("End exception report.")
                                     except Exception:
                                         warn("failed to fetch %s and because of non-HTTP Error" % (d.href))
                                         warn("The handled exception was:")
@@ -1455,6 +1560,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
         hrefs = [GOG_HOME_URL + extra['manualUrl']] #GOG_HOME_URL + tempd (this seem to be obsolete and always return forbidden)
         href_ds = []
         file_info_success = False
+        md5_success = False
         unreleased = False
         for href in hrefs:
             if not (unreleased or file_info_success):
@@ -1471,6 +1577,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
                              prev_verified=False,
                              old_name = None,
                              unreleased = False,
+                             md5_exempt = False,
                              gog_data = AttrDict(),
                              updated = None,
                              old_updated = None,
@@ -1494,26 +1601,47 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
                         #head_response = request_head(updateSession,d.href)
                         #with compat_open('head_test_headers.txt', mode='w', encoding='utf-8') as w:
                         #    w.write(str(head_response.headers))
-                        fetch_file_info(d, False,save_md5_xml,updateSession)
+                        if (False): #Going to try checking Extras for MD5s and do exemptions by file type rather than assuming extras don't have MD5s.
+                            fetch_file_info(d, False,save_md5_xml,updateSession)
+                        else:
+                            fetch_file_info(d, True,save_md5_xml,updateSession,product_api_context)
+                            
                         file_info_success = True
-                    except requests.HTTPError:
+                    except requests.HTTPError as e:
                         warn("failed to fetch %s" % d.href)
+                        try:
+                            d.provisional_name = unquote(urlparse(e.response.url).path.split('/')[-1])
+                        except Exception:   
+                            warn("failed to generate provisional name")
+                            warn("The handled exception was:")
+                            log_exception('')
+                            warn("End exception report.")
                     except Exception:
                         warn("failed to fetch %s because of non-HTTP Error" % d.href)
                         warn("The handled exception was:")
                         log_exception('')
                         warn("End exception report.")
+                    if d.md5_exempt == True or d.md5 != None:
+                        md5_success = True     
                 href_ds.append([d,file_info_success])
         if unreleased:
             debug("File Not Available For Manual Download Storing Canonical Link: %s" % d.href)
             filtered_extras.append(d)
-        elif file_info_success: #Will be the current d because no more are created once we're successful
-            debug("Successfully fetched file info from %s" % d.href)
+        elif file_info_success and md5_success: #Will be the current d because no more are created once we're successful
+            debug("Successfully fetched file info and md5 from %s" % d.href)
             filtered_extras.append(d)
-        else:
-            #None worked so go with the canonical link
-            error("Could not fetch file info so using canonical link: %s" % href_ds[0][0].href)
-            filtered_extras.append(href_ds[0][0])
+        else: #Check for first file info success since all MD5s failed.
+            any_file_info_success = False
+            for href_d in href_ds:
+                if not any_file_info_success:
+                    if (href_d[1]) == True:
+                        any_file_info_success = True
+                        filtered_extras.append(href_d[0])
+                        warn("Successfully fetched file info from %s but no md5 data was available" % href_d[0].href)
+            if not any_file_info_success:
+                #None worked so go with the canonical link
+                error("Could not fetch file info so using canonical link: %s" % href_ds[0][0].href)
+                filtered_extras.append(href_ds[0][0])
     out_list.extend(filtered_extras)
 
 
@@ -1558,6 +1686,13 @@ def filter_dlcs(item, dlc_list, lang_list, os_list,save_md5_xml,updateSession,pr
                         item.serials[potential_title] = pserial
                     else:
                         warn('DLC serial code is unprintable for %s, storing raw',potential_title)
+        downloads_dict = dict(dlc_dict['downloads'])
+        available_langs = list(downloads_dict.keys())
+        available_os_types = dict()
+        for available_lang in available_langs:
+                available_os_types[available_lang] =  list(downloads_dict[available_lang].keys())
+        item.available_langs[potential_title] = available_langs
+        item.available_os_types[potential_title] = available_os_types
         filter_downloads(item.downloads, dlc_dict['downloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
         filter_downloads(item.galaxyDownloads, dlc_dict['galaxyDownloads'], lang_list, os_list,save_md5_xml,updateSession,product_api_context)
         filter_extras(item.extras, dlc_dict['extras'],save_md5_xml,updateSession,product_api_context)
@@ -1795,6 +1930,9 @@ def process_argv(argv):
     g1.add_argument('-skipmd5', action='store_true', help='do not perform MD5 check')
     g1.add_argument('-skipsize', action='store_true', help='do not perform size check')
     g1.add_argument('-skipzip', action='store_true', help='do not perform zip integrity check')
+    g7 = g1.add_mutually_exclusive_group()
+    g7.add_argument('-highmemory', action='store_true', help='use in memory file to test multi-part zip files (instead of temporary file). At least 50 GB of unused memory is recommended to use this.')
+    g7.add_argument('-lowtmpspace', action='store_true', help='do not test multi-part zip archives (due to not having enough space for a temporary file). Recommended if tmp file location has less than 50 GB of free space. ')
     g2 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g2.add_argument('-delete', action='store_true', help='delete any files which fail integrity test')
     g2.add_argument('-noclean', action='store_true', help='leave any files which fail integrity test in place')
@@ -1816,6 +1954,7 @@ def process_argv(argv):
     g1.add_argument('-skipgalaxy',action='store_true', help='skip verification of any GOG Galaxy installer files')
     g1.add_argument('-skipstandalone',action='store_true', help='skip verification of any GOG standalone installer files')
     g1.add_argument('-skipshared',action='store_true',help ='skip verification of any installers included in both the GOG Galalaxy and Standalone sets')
+
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
 
@@ -1833,15 +1972,21 @@ def process_argv(argv):
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
 
 
-    g1 = sp1.add_parser('trash', help='Permanently remove orphaned files in your game directory (removes all files unless specific parameters are set)')
+    g1 = sp1.add_parser('trash', help='Permanently remove orphaned files in your game directory (removes only strict (matching file size and MD5 hash) duplicates of game files unless other parameters are set)')
     g1.add_argument('gamedir', action='store', help='root directory containing gog games')
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be trashed')
+    
     g1.add_argument('-installersonly', action='store_true', help='(Deprecated) Currently an alias for -installers')
-    g1.add_argument('-installers', action='store_true', help='delete file types used as installers')
-    g1.add_argument('-images', action='store_true', help='delete !images subfolders')
+    g1.add_argument('-folders', action='store_true', help='also deletes orphaned game folders (other options are permitted but redundant) that have a corresponding game folder. If -relaxed a corresponding game folder is not required.')
+    g1.add_argument('-installers', action='store_true', help='also delete file types used as installers even if they are not duplicates.')
+    g1.add_argument('-images', action='store_true', help='also delete !images subfolders that have a corresponding !images subfolder. If -relaxed a corresponding game is not required.' )
+    g1.add_argument('-relaxed', action='store_true', help = 'more relaxed about what to delete. Does not verify an existing file is a true match before deleting. May effect other parameters, as detailed by them.')
     g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
     g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
-    
+
+    g1 = sp1.add_parser('diagnostics', help='Outputs diagnostic data for script maintenance & reports, only fully works if data is properly generated by appropriate update')    
+    g1.add_argument('-nolog', action='store_true', help = 'doesn\'t writes log file gogrepo.log')
+    g1.add_argument('-debug', action='store_true', help = "Includes debug messages")
     
 
     g1 = p1.add_argument_group('other')
@@ -2395,6 +2540,15 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                         item[key] = item_json_data[key]
             # parse json data for downloads/extras/dlcs
             product_api_context = AttrDict(product_id=item.id, download_links=None)
+            downloads_dict = dict(item_json_data['downloads'])
+            available_langs = list(downloads_dict.keys())
+            available_os_types = dict()
+            for available_lang in available_langs:
+                    available_os_types[available_lang] =  list(downloads_dict[available_lang].keys())
+            item.available_langs = AttrDict()
+            item.available_langs[item.long_title] = available_langs
+            item.available_os_types = AttrDict()
+            item.available_os_types[item.long_title] = available_os_types
             filter_downloads(item.downloads, item_json_data['downloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
             filter_downloads(item.galaxyDownloads, item_json_data['galaxyDownloads'], lang_list, os_list,md5xmls,updateSession,product_api_context)
             filter_extras(item.extras, item_json_data['extras'],md5xmls,updateSession,product_api_context)
@@ -2463,6 +2617,69 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             info('returning to specified download request...')
             cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs)
 
+def cmd_output_diagnostic_data():
+    gamesdb = load_manifest()
+    output_diagnostic_data(gamesdb)
+
+def output_diagnostic_data(sorted_gamesdb):
+    known_languages = sorted(list(LANG_TABLE.values()))
+
+    used_languages = []
+    missing_galaxy_items = {}
+    missing_md5s = {}
+    extension_md5_count = {}
+    extension_missing_md5_count = {}
+    broken_links = {}
+    strange_items = {}    
+    for game in sorted_gamesdb:
+        game_missing_md5s = {}
+        game_missing_galaxy_items = {}
+        game_broken_links = []
+        game_strange_items = {}
+        for sub_item in game.get('available_langs') or {}:
+            used_languages = list(set(used_languages + game.available_langs[sub_item]))
+            for used_language in game.available_langs[sub_item]:
+                if not ( used_language in known_languages):
+                    info("Unknown language in manifest: " + used_language + " in game " + str(game.id))
+                        
+        for download in game.downloads + game.extras:
+            if download.name:
+                extension = os.path.splitext(download.name)[1].lower()
+                if not extension_md5_count.get(extension):
+                    extension_md5_count[extension] = 0
+                if not extension_missing_md5_count.get(extension):
+                    extension_missing_md5_count[extension] = 0
+                if download.gog_data.get('api_downlink_fallback'):
+                    game_missing_galaxy_items[download.name] = download.manualUrl
+                    if not download.gog_data.get('api_downlink'):
+                        game_strange_items[download.name] = download.manualUrl
+                if not download.md5:
+                    game_missing_md5s[download.name] = (download.manualUrl,extension in SKIP_MD5_FILE_EXT)
+                    extension_missing_md5_count[extension] += 1
+                else:
+                    if extension == ".zip":
+                        info("Zip with MD5 is " + download.name + " in " + game.slug )
+                    extension_md5_count[extension] += 1
+            elif not download.unreleased:
+                game_broken_links.append((download.get('provisional_name'),download.manualUrl))
+        if game_missing_galaxy_items:
+            missing_galaxy_items[game.id] = (game.title,game_missing_galaxy_items)
+        if game_missing_md5s:
+            missing_md5s[game.id] = (game.title,game_missing_md5s)
+        if game_broken_links:
+            broken_links[game.id] = (game.title,game_broken_links)
+        if game_strange_items:
+            strange_items[game.id] = (game.title,game_strange_items)
+    used_languages = sorted(used_languages)
+    info('Missing Galaxy Items: ' + str(missing_galaxy_items))
+    info('Missing MD5s: ' + str(missing_md5s))
+    info('Broken Links: ' + str(broken_links))
+    info('Obscured Product IDs: ' +  str(strange_items))
+    info('Extension MD5 count:' + str(extension_md5_count)) 
+    info('Extension Missing MD5 count:' + str(extension_missing_md5_count)) 
+    info('Languages used in your manifest:' + str(used_languages))
+
+    
 
 def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipgalaxy,skipstandalone,skipshared,destructive):
     """Recursively finds all files within root_dir and compares their MD5 values
@@ -3665,7 +3882,7 @@ def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipga
                     shutil.copy(os.path.join(src_game_dir, extra_file), dest_game_dir)
 
 
-def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy,skipstandalone,skipshared, skipfiles, force_verify, permissive_change_clear):
+def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy,skipstandalone,skipshared, skipfiles, force_verify, permissive_change_clear,high_memory,free_tmp_space):
     """Verifies all game files match manifest with any available md5 & file size info
     """
     item_count = 0
@@ -3784,7 +4001,8 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
 
         downloadslangs = [game_item for game_item in verify_sharedDownloads if game_item.lang in valid_langs]
         verify_sharedDownloads = downloadslangs
-    
+        
+        zipSplitArchiveFailCache = []
     
         for itm in verify_downloads + verify_galaxyDownloads + verify_sharedDownloads +verify_extras:
             try:
@@ -3839,14 +4057,64 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                         info('mismatched md5 for %s' % itm_dirpath)
                         bad_md5_cnt += 1
                         fail = True
-                if not fail and check_zips and itm.name.lower().endswith('.zip'): #Doesn't matter if it's a valid zip if size / MD5 are wrong, it's not the right zip
-                    try:
-                        if not test_zipfile(itm_file):
-                            info('zip test failed for ' % itm_dirpath)
-                            bad_zip_cnt += 1
-                            fail = True
-                    except NotImplementedError: #Temp work around until implement support
-                        warn('Unsupported file compression method, falling back to name/size check for %s' % itm_dirpath)
+                if not fail and check_zips:
+                     #Doesn't matter if it's a valid zip if size / MD5 are wrong, it's not the right zip
+                    if (itm.name.lower().endswith('.zip.001')):
+                            if sys.version_info[0] > 3 or (sys.version_info[0] == 3 and sys.version_info[1] >= 2):
+                                badZipException = zipfile.BadZipFile
+                            else:
+                                badZipException = zipfile.BadZipfile
+
+                            multiZipNames = glob.glob(os.path.splitext(itm.name)[0] + ".*",root_dir=os.path.dirname(itm_file))
+                            multiZipNamesSort = []
+                            for multiZipName in multiZipNames:
+                                ext = os.path.splitext(multiZipName)[1].lstrip('.')
+                                if ext.isdigit():
+                                    multiZipNamesSort.append((int(ext), multiZipName))
+                            multiZipNamesSort.sort(key=lambda x: x[0])
+                            multiZipNames = [x for _,x in multiZipNamesSort]
+                            multiZip = [os.path.join(gamedir, game.folder_name, x) for x in multiZipNames]
+                            if (high_memory or free_tmp_space):
+                                blocksize = 65536
+                                try:
+                                    with (io.BytesIO() if high_memory else tempfile.TemporaryFile()) as tmpfullzip:
+                                        for zipName in multiZip:
+                                            with open(zipName, "rb") as z:
+                                                buf = z.read(blocksize)
+                                                debug("Reading: " + zipName)
+                                                while len(buf) > 0:
+                                                    tmpfullzip.write(buf)
+                                                    buf = z.read(blocksize)                                
+                                                    
+                                        zipfile.ZipFile(tmpfullzip).testzip()
+                                except (badZipException,zlib.error) as e:
+                                    zipSplitArchiveFailCache = zipSplitArchiveFailCache + multiZipNames
+                                    info('zip test failed for %s' % itm_dirpath) 
+                                    fail = True
+                                    bad_zip_cnt += 1      
+                                except MemoryError:
+                                    warn('Not enough memory to test zip archive set, falling back to name/size check for %s' % itm_dirpath)
+                                except IOError as e:
+                                    if e.errno == errno.ENOSPC:
+                                        warn('Not enough disk space to test zip archive set, falling back to name/size check for %s' % itm_dirpath)
+                                    elif e.errno == errno.EDQUOT:
+                                        warn('Not enough disk quota to test zip archive set, falling back to name/size check for %s' % itm_dirpath)
+                                    else:
+                                        raise
+                                except NotImplementedError: #Temp work around until implement support
+                                    warn('Unsupported file compression method, falling back to name/size check for %s' % itm_dirpath)
+                    elif itm.name in zipSplitArchiveFailCache:
+                        info('zip test failed for %s' % itm_dirpath) 
+                        fail = True
+                        bad_zip_cnt += 1      
+                    elif itm.name.lower().endswith('.zip'):
+                        try:
+                            if not test_zipfile(itm_file):
+                                info('zip test failed for %s' % itm_dirpath)
+                                bad_zip_cnt += 1
+                                fail = True
+                        except NotImplementedError: #Temp work around until implement support
+                            warn('Unsupported file compression method, falling back to name/size check for %s' % itm_dirpath)
                 if delete_on_fail and fail:
                     info('deleting %s' % itm_dirpath)
                     os.remove(itm_file)
@@ -3914,39 +4182,67 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
     if clean_on_fail:
         info('cleaned items....... %d' % clean_file_cnt)
         
-def cmd_trash(cleandir,installers,images,dryrun):
-    downloading_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
-    for dir in os.listdir(downloading_root_dir):
-        testdir= os.path.join(downloading_root_dir,dir)
-        if os.path.isdir(testdir):
-            if installers:
+def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
+    orphaned_root_dir = os.path.join(cleandir, ORPHAN_DIR_NAME)
+    for dir in os.listdir(orphaned_root_dir):
+        testdir= os.path.join(orphaned_root_dir,dir)
+        if os.path.isdir(testdir):  
+            reference_dir = os.path.join(cleandir,dir)
+            refresh_contents = False
+            if folders:
+                if relaxed or os.path.isdir(reference_dir):
+                    try:
+                        if (not dryrun):
+                            shutil.rmtree(testdir)
+                        info("Deleting " + testdir)
+                    except Exception:
+                        error("Failed to delete directory: " + testdir)
+            if os.path.isdir(testdir): 
                 contents = os.listdir(testdir)
-                deletecontents = [x for x in contents if (len(x.rsplit(os.extsep,1)) > 1 and (os.extsep + x.rsplit(os.extsep,1)[1]) in INSTALLERS_EXT)]
-                for content in deletecontents:
-                    contentpath = os.path.join(testdir,content)
-                    if (not dryrun):
-                        os.remove(contentpath)
-                    info("Deleting " + contentpath )
-            if images:
-                images_folder = os.path.join(testdir,IMAGES_DIR_NAME)
-                if os.path.isdir(images_folder):
-                    if (not dryrun):
-                        shutil.rmtree(images_folder)
-                    info("Deleting " + images_folder )
-            if not ( installers or images):
-                try:
-                    if (not dryrun):
-                        shutil.rmtree(testdir)
-                    info("Deleting " + testdir)
-                except Exception:
-                    error("Failed to delete directory: " + testdir)
-            else:
-                try:
-                    if (not dryrun):
-                        os.rmdir(testdir)
-                    info("Removed empty directory " + testdir)
-                except OSError:
-                    pass
+                if images:
+                    images_folder = os.path.join(testdir,IMAGES_DIR_NAME)
+                    if os.path.isdir(images_folder):
+                        if relaxed or os.path.isdir(os.path.join(reference_dir,IMAGES_DIR_NAME)):
+                            if (not dryrun):
+                                shutil.rmtree(images_folder)
+                                refresh_contents=True
+                            info("Deleting " + images_folder )
+                if (refresh_contents):
+                    contents = os.listdir(testdir)
+                    refresh_contents = False
+                if installers:
+                    deletecontents = [x for x in contents if (len(x.rsplit(os.extsep,1)) > 1 and (os.extsep + x.rsplit(os.extsep,1)[1]) in INSTALLERS_EXT)]
+                    for content in deletecontents:
+                        contentpath = os.path.join(testdir,content)
+                        if (not dryrun):
+                            os.remove(contentpath)
+                            refresh_contents=True
+                        info("Deleting " + contentpath )
+                if (refresh_contents):
+                    contents = os.listdir(testdir)
+                    refresh_contents = False
+                if not os.path.isdir(reference_dir):
+                    info("Reference directory does not exist so {} can't have duplicates. ".format(testdir))
+                else:
+                    for content in contents:
+                        content_path = os.path.join(testdir,content)
+                        reference_content_path = os.path.join(reference_dir,content)
+                        if os.path.isfile(reference_content_path):
+                            if relaxed or ( os.path.getsize(content_path) == os.path.getsize(reference_content_path) and hashfile(content_path) == hashfile(reference_content_path)):
+                                if (not dryrun):
+                                    os.remove(content_path)
+                                    refresh_contents=True
+                                info("Deleting " + content_path )                          
+                if (refresh_contents):
+                    contents = os.listdir(testdir)
+                    refresh_contents = False
+                if (len(contents) == 0):
+                    try:
+                        if (not dryrun):
+                            os.rmdir(testdir)
+                        info("Removed empty directory " + testdir)
+                    except OSError:
+                        pass
 
                 
 def cmd_clear_partial_downloads(cleandir,dryrun):
@@ -4229,7 +4525,8 @@ def main(args):
         check_md5 = not args.skipmd5
         check_filesize = not args.skipsize
         check_zips = not args.skipzip
-        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete,not args.noclean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles, args.forceverify,args.permissivechangeclear)
+        free_tmp_space = not args.lowtmpspace
+        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete,not args.noclean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles, args.forceverify,args.permissivechangeclear,args.highmemory,free_tmp_space)
     elif args.command == 'backup':
         if not args.os:    
             if args.skipos:
@@ -4253,8 +4550,10 @@ def main(args):
     elif args.command == "trash":
         if (args.installersonly):
             args.installers = True
-        cmd_trash(args.gamedir,args.installers,args.images,args.dryrun)
-
+        cmd_trash(args.gamedir,args.installers,args.images,args.folders,args.relaxed,args.dryrun)
+    elif args.command == "diagnostics":
+        cmd_output_diagnostic_data()
+        
     etime = datetime.datetime.now()
     info('--')
     info('total time: %s' % (etime - stime))
