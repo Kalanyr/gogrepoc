@@ -1575,7 +1575,7 @@ def append_xml_extension_to_url_path(url):
         parsed_query['prefix'][0]=parsed_query['prefix'][0] + ".xml"
         encoded_query = urlencode(parsed_query,doseq=True)
         parsed = parsed._replace(query=encoded_query) 
-    except AtrribError:
+    except AttributeError:
             warn("Could not locate query param 'prefix', the URL format for MD5s has probably changed again. Please report to the maintainer. ")
     
     return urlunparse(parsed._replace(path = parsed.path + ".xml")).replace('%28','(').replace('%29',')').replace('%2F','/') #Thanks to pasbeg
