@@ -1793,8 +1793,8 @@ def append_xml_extension_to_url_path(url):
         parsed_query['prefix'][0]=parsed_query['prefix'][0] + ".xml"
         encoded_query = urlencode(parsed_query,doseq=True)
         parsed = parsed._replace(query=encoded_query) 
-    except AttributeError:
-            warn("Could not locate query param 'prefix', the URL format for MD5s has probably changed again. Please report to the maintainer. ")
+    except KeyError:
+            warn("Could not locate query param 'prefix', the URL format for MD5s has probably changed again. Please report to the maintainer (unless it is September 2026 in which case the new CDN is probably not live for you yet and you can ignore this).")
     
     return urlunparse(parsed._replace(path = parsed.path + ".xml")).replace('%28','(').replace('%29',')').replace('%2F','/') #Thanks to pasbeg
 
