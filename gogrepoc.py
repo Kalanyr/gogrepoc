@@ -3408,19 +3408,14 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
 
     info('-'*60)
     
-    def killresponse(response):
-        response.close()
-
     # work item I/O loop
+    # Stalls are caught by the HTTP_TIMEOUT read timeout set in request(), which surfaces as a ConnectionError below.
     def ioloop(tid, path, response, out):
         #info("Entering I/O Loop - " + path)
         sz, t0 = True, time.time()
         dlsz = 0
-        responseTimer = threading.Timer(HTTP_TIMEOUT,killresponse,[response])
-        responseTimer.start()
         try:
-            for chunk in response.iter_content(chunk_size=4*1024):
-                responseTimer.cancel()
+            for chunk in response.iter_content(chunk_size=64*1024):
                 if (chunk):
                     t = time.time()
                     out.write(chunk)
@@ -3429,15 +3424,12 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
                     with lock:
                         sizes[path] -= sz
                         rates.setdefault(path, []).append((tid, (sz, dt)))
-                responseTimer = threading.Timer(HTTP_TIMEOUT,killresponse,[response])
-                responseTimer.start()
         except (requests.exceptions.ConnectionError,requests.packages.urllib3.exceptions.ProtocolError) as e:
             error("server response issue while downloading content for %s" % (path))
         except (requests.exceptions.SSLError) as e:
             error("SSL issue while downloading content for %s" % (path))
         except (requests.exceptions.ChunkedEncodingError) as e:
             error("Encoding Error In Chunk for %s" %  (path))
-        responseTimer.cancel()
         #info("Exiting I/O Loop - " + path)
         return dlsz            
 
