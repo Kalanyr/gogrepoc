@@ -1794,8 +1794,7 @@ def append_xml_extension_to_url_path(url):
         encoded_query = urlencode(parsed_query,doseq=True)
         parsed = parsed._replace(query=encoded_query) 
     except KeyError:
-            warn("Could not locate query param 'prefix', the URL format for MD5s has probably changed again. Please report to the maintainer (unless it is September 2026 in which case the new CDN is probably not live for you yet and you can ignore this).")
-    
+            debug("Could not locate query param 'prefix'. This is a debug output indicating the cause of following MD5 warning/errors (if any), if no such errors follow, this is not relevant (GOG is using a server for which the original/fallback server parsing works).")
     return urlunparse(parsed._replace(path = parsed.path + ".xml")).replace('%28','(').replace('%29',')').replace('%2F','/') #Thanks to pasbeg
 
 def process_argv(argv):
@@ -2065,7 +2064,7 @@ def cmd_login(user, passwd):
     etree = html5lib.parse(page_response.text, namespaceHTMLElements=False)
     # Bail if we find a request for a reCAPTCHA *in the login form*
     loginForm = etree.find('.//form[@name="login"]')
-    if (loginForm is None) or len(loginForm.findall('.//div[@class="g-recaptcha form__recaptcha"]')) > 0:
+    if (loginForm is None) or len(loginForm.findall('.//div[@class="g-recaptcha form__recaptcha"]')) > 0 or  len(loginForm.findall('.//ol[@class="form__fieldset form__fieldset--captcha"]')) > 0:
         if loginForm is None:
             error("Could not locate login form on login page to test for reCAPTCHA, please contact the maintainer. In the meantime use a browser (Firefox recommended) to sign in at the below url and then copy & paste the full URL")
         else:
