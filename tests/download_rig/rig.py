@@ -21,6 +21,7 @@ def load_module(path, name):
 class Server:
     def __init__(self):
         self.files, self.xml, self.faults, self.images, self.hits, self.names = {}, {}, {}, {}, {}, {}
+        self.file_bytes = 0                  # bytes of file bodies sent (not xml, not images): what really crossed the 'network'
         srv = self
         class H(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -44,7 +45,9 @@ class Server:
                 if key not in srv.files or fault == '404' or (head and fault == 'head404') or (not head and fault == 'get404'): return self.reply(404, head=head)
                 data = srv.files[key]; total = len(data)
                 rng = self.headers.get('Range')
-                if head or not rng: return self.reply(200, data if not head else b'', head=head, headers=[('Accept-Ranges', 'bytes')])
+                if head or not rng:
+                    if not head: srv.file_bytes += len(data)
+                    return self.reply(200, data if not head else b'', head=head, headers=[('Accept-Ranges', 'bytes')])
                 a, b = re.match(r'bytes=(\d+)-(\d+)', rng).groups(); a, b = int(a), min(int(b), total - 1)
                 body = data[a:b + 1]
                 cr = 'bytes %d-%d/%d' % (a, b, total)
@@ -57,6 +60,7 @@ class Server:
                     half = len(body) // 2; self.wfile.write(body[:half]); self.wfile.flush(); time.sleep(1.3 if fault == 'slow' else 2.0)
                     if fault == 'slow': self.wfile.write(body[half:]); return
                     self.close_connection = True; return
+                srv.file_bytes += len(body)
                 self.reply(206, body, headers=[('Content-Range', cr)])
         class Quiet(ThreadingHTTPServer):
             def handle_error(self, request, client_address): pass
@@ -595,7 +599,7 @@ def run(mod, name):
     calls = sorted(norm(repr(c)) for c in calls)
     hits = {k: v for k, v in srv.hits.items()}
     os.chdir(cwd); srv.stop(); shutil.rmtree(work, ignore_errors=True)
-    return dict(logs=logs, manifest=manifest, tree=tree, exc=exc, hits=hits, calls=calls, manifest_obj=manifest_obj, served=served, info_texts=info_texts, report=report)
+    return dict(logs=logs, manifest=manifest, tree=tree, exc=exc, hits=hits, calls=calls, manifest_obj=manifest_obj, served=served, info_texts=info_texts, report=report, file_bytes=srv.file_bytes)
 
 def compare(a, b):
     diffs = []

@@ -168,6 +168,99 @@ class EntryPointTests(unittest.TestCase):
 
 
 @functools.lru_cache(maxsize=None)
+def download_run(name):
+    """The whole rig result of a scenario (its report, and file_bytes: what the fake server really sent)."""
+    with mock.patch.object(threading, 'excepthook', lambda args: None):
+        return rig.run(g, name)
+
+
+class TransferSummaryTests(unittest.TestCase):
+    """'files downloaded' must count what came over the network. A file that was marked for change but was already right on the disk,
+    chunk by chunk, is only checked in place; before, it was counted as downloaded with its full size (208 GB 'downloaded' in four
+    minutes, with one file really transferred)."""
+    CHECKED = 'files verified in place (nothing downloaded)'
+
+    def counts(self, name):
+        return download_run(name)['report']['counts']
+
+    def test_a_fresh_download_reports_exactly_the_bytes_that_were_sent(self):
+        run = download_run('fresh_download')
+        counts = run['report']['counts']
+        self.assertEqual(counts['files downloaded'], [10, run['file_bytes']])
+        self.assertNotIn(self.CHECKED, counts)
+
+    def test_files_that_were_already_right_are_counted_as_checked_not_as_downloaded(self):
+        run = download_run('force_change_flags')                # every file is marked for change, and every file is on the disk
+        counts = run['report']['counts']
+        self.assertEqual(counts[self.CHECKED][0], 5)             # the five with checksum data on the server are checked in place
+        self.assertEqual(counts[self.CHECKED][1], 9000)          # ... and the summary says how much data that was
+        self.assertEqual(counts['files downloaded'][0], 5)       # the other five cannot be checked and are fetched again
+        self.assertEqual(counts['files downloaded'][0] + counts[self.CHECKED][0], 10)
+
+    def test_the_downloaded_size_is_what_the_server_sent_not_the_size_of_the_files(self):
+        run = download_run('force_change_flags')
+        self.assertEqual(run['report']['counts']['files downloaded'][1], run['file_bytes'])
+        total = sum(c[1] for c in run['report']['counts'].values() if c[1])
+        self.assertGreater(total, run['file_bytes'])             # the checked files are not in the downloaded figure
+
+    def test_a_file_repaired_chunk_by_chunk_counts_only_the_chunks_that_arrived(self):
+        run = download_run('resume_chunk_repair')
+        downloaded = run['report']['counts']['files downloaded']
+        self.assertEqual(downloaded[1], run['file_bytes'])
+        self.assertLess(downloaded[1], 16000)                    # the ten files together are bigger than what was fetched
+        self.assertEqual(downloaded[0], 10)
+
+    def test_recovered_files_keep_their_own_line_and_size(self):
+        counts = self.counts('provisional_files')
+        self.assertEqual(counts['files recovered from an earlier run'], [2, 1800])
+        self.assertNotIn(self.CHECKED, counts)
+
+    def test_nothing_to_do_is_neither(self):
+        counts = self.counts('all_up_to_date')
+        self.assertNotIn('files downloaded', counts)
+        self.assertNotIn(self.CHECKED, counts)
+
+    def test_both_lines_are_in_the_summary_text(self):
+        report = g.RunReport()
+        report.reset('download')
+        report.count('files downloaded', 1, 100 * 1024 * 1024)
+        report.count(self.CHECKED, 215, 208 * 1024 ** 3)
+        with self.assertLogs('gogrepoc', level='INFO') as logs:
+            report.log()
+        text = '\n'.join(logs.output)
+        self.assertRegex(text, r'files downloaded:\s+1 \(100\.00MB\)')
+        self.assertRegex(text, r'files verified in place \(nothing downloaded\):\s+215 \(208\.00GB\)')
+
+
+class FinishProvisionalClassificationTests(unittest.TestCase):
+    """How _finish_provisional_downloads sorts a finished file into the summary."""
+
+    def finish(self, path, in_provisional, transferred, size=5000):
+        job = g._DownloadJob(None, False, None)
+        if in_provisional:
+            job.provisional_dict[path] = object()
+        if transferred:
+            job.transferred[path] = transferred
+        item = g.AttrDict(size=size, force_change=True, prev_verified=False, updated='x', old_updated=None)
+        job.work_provisional.put((path, path + '.part', item, [item]))
+        g.run_report.reset('download')
+        with mock.patch.object(g.shutil, 'move'), mock.patch.object(g, 'save_manifest'), self.assertLogs('gogrepoc', level='DEBUG'):
+            g._finish_provisional_downloads(job)
+            g.info('end of test')
+        return g.run_report.counts
+
+    def test_data_that_arrived_is_a_download_of_that_size(self):
+        self.assertEqual(self.finish('a/f.exe', False, 1234), {'files downloaded': [1, 1234]})
+
+    def test_no_data_is_a_file_checked_in_place_with_the_size_of_the_file(self):
+        self.assertEqual(self.finish('a/f.exe', False, 0), {'files verified in place (nothing downloaded)': [1, 5000]})
+
+    def test_a_file_from_an_earlier_run_is_recovered_whatever_else_is_known(self):
+        self.assertEqual(self.finish('a/f.exe', True, 0), {'files recovered from an earlier run': [1, 5000]})
+        self.assertEqual(self.finish('a/f.exe', True, 99), {'files recovered from an earlier run': [1, 5000]})
+
+
+@functools.lru_cache(maxsize=None)
 def download_report(name):
     with mock.patch.object(threading, 'excepthook', lambda args: None):      # a scenario crashes a thread on purpose
         return rig.run(g, name)['report']

@@ -72,13 +72,16 @@ class ConfigTestCase(unittest.TestCase):
 
 # --- identity ------------------------------------------------------------------------------------------------------
 
-def notes_entry_numbers():
-    """The numbers of the entries in the refactoring notes at the top of the script ('# 24. New command: ...')."""
+CHANGELOG = os.path.join(SCRIPT_DIR, 'CHANGELOG.md')
+
+
+def changelog_headings():
+    """The headings of the entries in CHANGELOG.md, in the order in which they appear: (number, text of the heading)."""
     import re
-    with open(SCRIPT, encoding='utf-8') as reader:
+    with open(CHANGELOG, encoding='utf-8') as reader:
         text = reader.read()
-    notes = text.split('# Known issues noticed while refactoring')[0]
-    return [int(n) for n in re.findall(r'^# (\d+)\. ', notes, flags=re.M)]
+    return [(int(a or b), line) for line in text.splitlines()
+            for a, b in re.findall(r'^## (?:0\.5\.(\d+)|Entry (\d+)) - ', line)]
 
 
 class IdentityTests(unittest.TestCase):
@@ -86,11 +89,38 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(g.__appname__, 'gogrepo_delta.py')
         self.assertEqual(g.USER_AGENT, 'GOGRepoDelta/' + g.__version__)
 
-    def test_the_patch_number_of_the_version_is_the_number_of_the_newest_notes_entry(self):
-        # the rule: every new entry in the refactoring notes raises the version, so that 0.5.N matches entry N
-        numbers = notes_entry_numbers()
-        self.assertEqual(numbers, list(range(1, len(numbers) + 1)), 'the entries must be numbered 1, 2, 3, ... without gaps')
-        self.assertEqual(g.__version__, '0.5.%d' % numbers[-1])
+    def test_the_patch_number_of_the_version_is_the_number_of_the_newest_changelog_entry(self):
+        # the rule: every new entry in CHANGELOG.md raises the version, so that 0.5.N matches entry N
+        numbers = [n for n, heading in changelog_headings()]
+        self.assertEqual(numbers, list(range(len(numbers), 0, -1)), 'the entries must be numbered without gaps, newest first')
+        self.assertEqual(g.__version__, '0.5.%d' % numbers[0])
+
+    def test_entries_from_24_on_are_headed_with_their_version_the_older_ones_are_not(self):
+        import re
+        for number, heading in changelog_headings():
+            if number >= 24:
+                self.assertTrue(heading.startswith('## 0.5.%d - ' % number), heading)
+            else:
+                self.assertTrue(heading.startswith('## Entry %d - ' % number), heading)
+            if number >= 25:                                        # from 25 on every entry is dated dd.mm.yyyy
+                self.assertRegex(heading, r'^## 0\.5\.%d - \d\d\.\d\d\.\d{4} - \S' % number)
+
+    def test_the_known_issues_and_the_version_rule_are_in_the_changelog(self):
+        with open(CHANGELOG, encoding='utf-8') as reader:
+            text = reader.read()
+        self.assertIn('## Known issues (not fixed yet)', text)
+        self.assertIn('## How the version works', text)
+        self.assertLess(text.index('## Known issues'), text.index('## 0.5.%d' % int(g.__version__.split('.')[-1])))   # before the entries
+
+    def test_the_notes_are_no_longer_in_the_script_which_points_to_the_changelog(self):
+        import re
+        with open(SCRIPT, encoding='utf-8') as reader:
+            text = reader.read()
+        header = text.split('\nimport ')[0]
+        self.assertIn('CHANGELOG.md', header)
+        self.assertEqual(re.findall(r'^# \d+\. ', header, flags=re.M), [])
+        self.assertNotIn('REFACTORING NOTES', header)
+        self.assertLess(header.count('\n'), 40)                     # a short header, not a book
 
     def test_version_option_shows_them(self):
         out = io.StringIO()
@@ -914,7 +944,7 @@ class ProjectAddressTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             g.process_argv(['gogrepo_delta.py', '--help'])
         self.assertIn('https://github.com/MarS301/gogrepo_delta', out.getvalue())
-        self.assertEqual(g.__author__.split(','), ['eddie3', 'kalaynr', 'MarS301', 'claude.ai'])    # the original authors, then this version's
+        self.assertEqual(g.__author__.split(','), ['eddie3', 'kalanyr', 'MarS301', 'claude.ai'])    # the original authors, then this version's
 
 
 class EnsureConfigFileTests(ConfigTestCase):

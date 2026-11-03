@@ -63,6 +63,61 @@ class ManifestSave(Base):
         NEW.save_manifest_core_worker(items(NEW, tag='b'), self.path)
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
 
+class DescriptorOwnership(Base):
+    """After a failed save, the file descriptor of the temporary file must not be closed a second time: the file object that
+    took it over has already closed it, and the number may belong to another thread's file by then."""
+
+    def test_a_failed_swap_does_not_close_the_descriptor_again(self):
+        closed = []
+        real_close = os.close
+        with mock.patch.object(NEW, '_replace_file', side_effect=PermissionError('locked by the virus scanner')), \
+                mock.patch.object(NEW.os, 'close', lambda fd: (closed.append(fd), real_close(fd))[1]):
+            with self.assertRaises(PermissionError):
+                NEW.atomic_write_text(self.path, lambda w: w.write('data'))
+        self.assertEqual(closed, [])                      # the file object closed it; nobody else may
+        self.assertEqual(self.leftovers(), [])            # the temporary file is still removed
+
+    def test_another_threads_file_survives_a_failed_save(self):
+        other = {}
+
+        def replace_while_another_thread_opens_a_file(src, dst):
+            other['file'] = open(os.path.join(self.d, 'other.bin'), 'wb')       # gets the number that was just freed
+            raise PermissionError('locked')
+        with mock.patch.object(NEW, '_replace_file', replace_while_another_thread_opens_a_file):
+            with self.assertRaises(PermissionError):
+                NEW.atomic_write_text(self.path, lambda w: w.write('data'))
+        try:
+            other['file'].write(b'still usable')
+            other['file'].flush()
+        finally:
+            other['file'].close()
+
+    def test_when_the_file_object_cannot_be_made_the_descriptor_is_closed_once(self):
+        closed = []
+        real_close = os.close
+        with mock.patch.object(NEW.os, 'fdopen', side_effect=OSError('no file object')), \
+                mock.patch.object(NEW.os, 'close', lambda fd: (closed.append(fd), real_close(fd))[1]):
+            with self.assertRaises(OSError):
+                NEW.atomic_write_text(self.path, lambda w: w.write('data'))
+        self.assertEqual(len(closed), 1)                  # nobody owned it, so it is closed here, exactly once
+        self.assertEqual(self.leftovers(), [])
+
+    def test_an_error_while_writing_closes_nothing_twice_and_keeps_the_old_file(self):
+        NEW.atomic_write_text(self.path, lambda w: w.write('old'))
+        closed = []
+        real_close = os.close
+
+        def failing_write(w):
+            w.write('new')
+            raise ValueError('serialisation failed')
+        with mock.patch.object(NEW.os, 'close', lambda fd: (closed.append(fd), real_close(fd))[1]):
+            with self.assertRaises(ValueError):
+                NEW.atomic_write_text(self.path, failing_write)
+        self.assertEqual(closed, [])
+        self.assertEqual(self.read(self.path), 'old')
+        self.assertEqual(self.leftovers(), [])
+
+
 class TokenAndConfig(Base):
     def test_token_roundtrip_and_crash_safety(self):
         tok = {'user': 'u', 'access_token': 'abc', 'refresh_token': 'def'}
@@ -80,6 +135,28 @@ class TokenAndConfig(Base):
         with mock.patch.object(NEW, 'TOKEN_FILENAME', p):
             NEW.save_token({'a': 1}); os.chmod(p, 0o600); NEW.save_token({'a': 2})
             self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX permissions')
+    def test_new_token_is_private_from_first_creation(self):
+        p = os.path.join(self.d, 'new-gog-token.dat')
+        with mock.patch.object(NEW, 'TOKEN_FILENAME', p):
+            NEW.save_token({'access_token': 'secret'})
+        self.assertEqual(stat.S_IMODE(os.stat(p).st_mode), 0o600)
+
+    def test_token_loader_does_not_execute_python(self):
+        p = os.path.join(self.d, 'malicious-token.dat')
+        marker = os.path.join(self.d, 'executed')
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write("__import__('pathlib').Path(%r).write_text('bad')" % marker)
+        with self.assertRaises((ValueError, SyntaxError, TypeError)):
+            NEW.load_token(p)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_legacy_literal_restores_nested_attrdict(self):
+        loaded = NEW._load_legacy_literal("AttrDict(**{'outer': AttrDict(**{'value': 7}), 'rows': [{'x': 1}], 'text': 'keep }) exactly'})")
+        self.assertEqual(loaded.outer.value, 7)
+        self.assertEqual(loaded.rows[0].x, 1)
+        self.assertEqual(loaded.text, 'keep }) exactly')
 
     def test_config_roundtrip(self):
         p = os.path.join(self.d, 'gog-config.dat')

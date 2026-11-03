@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.29-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.36-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](https://www.gnu.org/licenses/gpl-3.0.html)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -26,7 +26,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.29` |
+| **Current version** | `v0.5.36` |
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -321,7 +321,9 @@ Search terms are matched against game IDs, titles, and names; all supplied words
 
 - `--format table`: readable table output (default).
 - `--format ids`: one game title/ID per line for use in scripts.
-- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games.
+- `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`: filter the listed games. By default `list` shows all systems and languages (it does not use the computer's defaults), but values from the config file apply.
+
+If nothing is found, `list` says why and exits with `1`: either no game matches the words (with suggestions), or games match but none has files for the chosen operating system / language (the message names the games and the filter in use, which may come from the config file).
 
 ### `export`
 
@@ -393,6 +395,8 @@ For `update`, `download`, `verify`, `import`, and `backup`, the default selectio
 When the language is selected automatically and is not English, English is used as a fallback **per game, file group, and operating system** if the preferred language is unavailable. An explicit `--lang` or `--skiplang` selection disables this automatic fallback. For example, a German default can select German Windows installers and English Linux installers when no German Linux installer exists.
 
 **Manifest note:** an update replaces the stored file information for each game it fetches. If you need multiple OS/language variants, specify them explicitly (for example, `--os windows linux --lang en de`). A plain update can replace other variants previously stored for an updated game; files already on disk are not automatically deleted.
+
+Before a new update starts, the program compares the manifest with the operating systems and languages the update will use. If the update would drop installer entries for other systems or languages, it **warns** (it does not stop): how many installer files of how many games would go and why, that `clean` would then take the files on disk for orphans and move them to `!orphaned`, and that a later update that includes them again adds the entries back as new ones (`download` then checks them again and fetches only what is not right). To avoid it, give all the systems and languages you use with `--os` / `--lang`, or put them in the config file. An update without `--full` says "up to N" because only new and updated games are fetched.
 
 ## Configuration
 
@@ -478,7 +482,9 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-At the end of a command, the program reports a summary of completed work and lists failures with reasons. Completed files recovered from an earlier interrupted run are included in the recovery count.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.35 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+
+At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 
 When a chunk download is incomplete, the chunk-verification retry loop waits for `http_retry_delay` before each retry, except after the final attempt. The wait occurs outside the download job lock, so other downloads can proceed. With the default settings, retry delays can add up to 20 seconds (4 retries × 5 seconds) before the download gives up. Exit status:
 
@@ -499,7 +505,7 @@ A command can therefore complete most of its work and still return `1`. This is 
 ## Credits and links
 
 - Current repository: [MarS301/gogrepo_delta](https://github.com/MarS301/gogrepo_delta)
-- Original projects: `eddie3` and `kalaynr`
+- Original projects: `eddie3` and `kalanyr`
 - Current version contributors: `MarS301` and `claude.ai`
 - GOG: [https://www.gog.com/](https://www.gog.com/)
 
@@ -507,7 +513,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the changes documented for this version.
 
 ## Changelog
 
-The release history and notable maintenance changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+Every change, newest first, the known issues and the rule for the version number (`0.5.N`, where N is the number of the newest entry) are in [CHANGELOG.md](CHANGELOG.md).
 
 
 ---
@@ -517,3 +523,13 @@ The release history and notable maintenance changes are recorded in [CHANGELOG.m
 **Preserve your library. Verify your files. Keep control of your collection.**
 
 </div>
+
+
+## Token storage
+
+New logins save credentials in `gog-token.json`, encrypted by default with a password you choose. Encrypted mode requires the third-party `cryptography` package (`python -m pip install cryptography`).
+The password is requested once per process and is not stored. For an unattended machine, set `GOGREPO_TOKEN_MODE=plain` explicitly;
+this stores the token as readable JSON and provides no encryption. Existing `gog-token.dat` files
+are read only when `gog-token.json` is absent. Their contents are migrated to the new file, but
+the legacy file is never modified or deleted. If the JSON file is damaged or its password is
+wrong, the program reports the problem rather than silently using an older token.

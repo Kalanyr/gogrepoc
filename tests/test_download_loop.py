@@ -135,7 +135,7 @@ class DownloadLoopTests(unittest.TestCase):
         response.iter_content = lambda chunk_size=1: slow_chunks()
         with mock.patch.object(g, 'HTTP_TIMEOUT', 0.3):
             self.assertEqual(g._download_ioloop(job_for('p', 80), 1, 'p', response, io.BytesIO()), 80)
-        self.assertFalse(response.closed.is_set())
+        self.assertTrue(response.closed.is_set())
 
 
 if __name__ == '__main__':

@@ -3,9 +3,18 @@
 The script needs requests, html5lib and psutil at import time. If html5lib/psutil are not installed
 (for example in a bare CI container) harmless empty stand-ins are used so the pure-logic tests can
 still run; none of the code under test touches them."""
-import importlib.util, os, sys, tempfile, types
+import atexit, importlib.util, os, shutil, sys, tempfile, types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The script keeps its data (gog-manifest.dat, gogrepo.log, the config file, ...) in the folder it is started from, and a command that
+# saves the manifest writes there. A test must never do that in the folder the tests were started from: that may be the folder of a
+# real library, and its manifest would be overwritten. So the whole test run happens in a scratch folder that is removed at the end.
+# This is done before the script is imported (it opens gogrepo.log in the current folder when it is loaded).
+LAUNCH_DIR = os.getcwd()
+SCRATCH_DIR = os.path.realpath(tempfile.mkdtemp(prefix='gogrepo_delta_cwd_'))
+os.chdir(SCRATCH_DIR)
+atexit.register(shutil.rmtree, SCRATCH_DIR, True)
 for _name in ('html5lib', 'psutil'):
     try:
         __import__(_name)

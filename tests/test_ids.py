@@ -423,6 +423,51 @@ class ListCommandTests(unittest.TestCase):
         self.assertNotIn('Did you mean', log)
         self.assertEqual(g.run_report.exit_status(), 1)
 
+    def test_words_that_match_games_which_the_filter_removed_say_so(self):
+        # the game exists (beneath_a_steel_sky has German files only); the language filter takes it out of the list
+        out, log = self.run_list(['steel'], [], [], ['en'], [])
+        self.assertEqual(out, '')
+        self.assertIn("1 game matches 'steel' (beneath_a_steel_sky)", log)
+        self.assertIn('but none has files for the chosen operating system / language', log)
+        self.assertNotIn('no game matches', log)
+        self.assertNotIn('Did you mean', log)
+        self.assertEqual(g.run_report.exit_status(), 1)
+        self.assertEqual([f[0] for f in g.run_report.failures], ['list steel'])
+
+    def test_the_active_filter_is_named_so_that_a_filter_from_the_config_file_is_not_a_surprise(self):
+        out, log = self.run_list(['steel'], ['linux', 'mac'], [], ['en'], [])
+        self.assertIn('-os linux mac', log)
+        self.assertIn('-lang en', log)
+        self.assertIn('config file', log)
+        out, log = self.run_list(['steel'], [], ['windows'], [], ['de'])
+        self.assertIn('-skipos windows', log)
+        self.assertIn('-skiplang de', log)
+
+    def test_several_filtered_out_games_are_counted_and_only_the_first_are_named(self):
+        for n in range(8):
+            self.items.append(make_game(500 + n, 'ultima_%d' % n, 'Ultima %d' % n, os_type='mac'))
+        out, log = self.run_list(['ultima'], ['windows'], [], [], [])
+        self.assertIn("9 games match 'ultima'", log)                 # the 8 new ones and ultima_iv_quest_of_the_avatar
+        self.assertIn('and 4 more', log)                              # five are named
+        self.assertEqual(out, '')
+
+    def test_words_that_match_no_game_at_all_still_get_suggestions_from_all_games_when_a_filter_is_set(self):
+        out, log = self.run_list(['Witcer'], ['mac'], [], [], [])
+        self.assertIn("no game matches 'Witcer'. Did you mean:", log)
+        self.assertIn('the_witcher', log)
+        self.assertEqual(g.run_report.exit_status(), 1)
+
+    def test_a_filter_that_leaves_nothing_names_the_filter(self):
+        out, log = self.run_list([], ['mac'], [], ['de'], [])
+        self.assertIn('no game has files for this operating system / language', log)
+        self.assertIn('-os mac', log)
+        self.assertIn('-lang de', log)
+
+    def test_games_that_pass_the_filter_are_listed_as_before(self):
+        out, log = self.run_list(['steel'], [], [], ['de'], [])
+        self.assertIn('beneath_a_steel_sky', out)
+        self.assertEqual(g.run_report.exit_status(), 0)
+
     def test_a_filter_that_leaves_nothing_is_a_failed_run(self):
         out, log = self.run_list([], ['mac'], [], ['de'], [])
         self.assertEqual(out, '')
@@ -575,6 +620,9 @@ class HookTests(unittest.TestCase):
         g.run_report.reset('test')
         self.dir = tempfile.mkdtemp(prefix='hooks_')
         self.addCleanup(shutil.rmtree, self.dir, True)
+        saver = mock.patch.object(g, 'save_manifest')          # the commands save the manifest at the end: not into a real file
+        saver.start()
+        self.addCleanup(saver.stop)
 
     def select(self, ids=(), skipids=()):
         with self.assertLogs('gogrepoc', level='DEBUG') as logs:

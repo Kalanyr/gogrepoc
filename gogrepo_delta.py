@@ -7,425 +7,28 @@ if False:
     print("Please start this script with a python interpreter: python /path/to/gogrepo_delta.py")
 #END#
 __appname__ = 'gogrepo_delta.py'
-__author__ = 'eddie3,kalaynr,MarS301,claude.ai'
-__version__ = '0.5.29'   # 0.5.N: N is the number of the newest entry in the refactoring notes below (raise it with every new entry)
+__author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
+__version__ = '0.5.37'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
-# REFACTORING NOTES
+# gogrepo_delta.py - back up your GOG library (a single file, by choice)
 #
-# This file is gogrepoc.py after an incremental refactoring. The goal was to keep behaviour; the
-# only intended differences are listed explicitly (marked "DIFFERENCE"). Places that were changed
-# carry a "Refactoring" comment or docstring. Changes in the order they were made:
-#
-# 1. Command line
-#    - GogArgumentParser: every legacy single-dash long option (-skipos, -dryrun, ...) is now also
-#      accepted GNU style (--skipos, --dryrun). The old spellings work exactly as before.
-#    - add_common_flags(): -nolog / -debug were copy-pasted into all 10 sub-commands, now defined
-#      once (help typo "doesn't writes" fixed).
-#    - validate_lang_and_os(): the language/os checks were extracted from process_argv, same messages.
-#
-# 2. Login
-#    - A password given on the command line still works but now logs a deprecation warning (it is
-#      visible in shell history and process lists). Without it the prompt uses
-#      getpass.getpass("Password: "), as before.
-#
-# 3. Python 2 support removed (Python 3.10+ is required, which the start-up check already enforced)
-#    - Removed: __future__ imports, sys.version_info branches, compat_open (now plain open),
-#      universalLineEnd / storeExtend (argparse action 'extend'), u'' string prefixes, the Windows
-#      Python 2.7 long-path workarounds and the Python 2-only imports (dateutil, pytz, string, codecs).
-#    - The "End Of Support for Python 2.7 and 3.8" warning in main() was unreachable (the start-up
-#      check exits first) and was removed. The start-up errors now go to stderr.
-#
-# 4. Bug fix: in cmd_import, setattr(entry, "old_updated", updated) used an undefined name
-#    (NameError in a rarely used path); it is now None, like the line before it.
-#
-# 5. Logging
-#    - Logger renamed 'ws' -> 'gogrepoc'. The log file now has date and level on every line
-#      (the console format is unchanged).
-#    - Remaining print() calls that were messages now use logging: failed-download marker
-#      ("! path") is an error() line, Jython notice is error(), update_self() debug dumps are debug().
-#    - Level corrections: verify findings (mismatched size/md5, zip test failed, missing file) and
-#      "failed - closing outstanding handle" are warnings; the three XML verification messages that
-#      end in "skipping" went from error to warning.
-#
-# 6. Atomic saves: atomic_write_text() (+ _replace_file, _fsync_directory) writes to <file>.tmp,
-#    flushes to disk and swaps it in with os.replace. Used for the manifest (previous version still
-#    copied to .bak), resume manifest, token and config file. Before, a crash between "move to .bak"
-#    and "move into place" could leave no manifest at all; permissions of an existing file are kept.
-#
-# 7. Combined MD5 warnings
-#    - note_summarised() / flush_summarised(): repetitive per-file conditions are logged at DEBUG and
-#      reported once as a combined warning (end of cmd_update and cmd_download, and at exit as a safety net).
-#    - request(..., quiet_statuses=(404,)): a 404 for an MD5 XML file is an expected answer and is no
-#      longer logged as a warning by request() (it is still raised and handled by the caller).
-#    - md5_xml_url(): URL building split out of append_xml_extension_to_url_path so it is pure.
-#
-# 8. Small fixes
-#    - path_preserving_split_ext now uses os.path.splitext: names without an extension no longer raise
-#      IndexError (moving an orphaned "README" onto an existing "README" used to crash) and a leading
-#      dot is not an extension (".hidden" -> ".hidden(1)" instead of "(1).hidden").
-#    - numbered_name(): the "(n)" clash naming rule (incl. GOG's multi-part .bin sets) was copy-pasted in
-#      makeDeDuplicateName and move_with_increment_on_clash; both use it now. makeDeDuplicateName
-#      no longer raises ValueError for names without an extension.
-#    - is_numeric_id() also catches TypeError (None and other non-strings return False).
-#    DIFFERENCE: the crash cases above now work; dotfile clash names changed as described.
-#
-# 9. cmd_download split (it was one function of ~925 lines with nested closures)
-#    cmd_download is now a short orchestrator. Helpers (all module level, shared state in _DownloadJob):
-#      _select_download_items, _index_items_by_title, _clean_work_dir, _process_download_item,
-#      _item_download_lists, _write_info_file (+_write_info_entries), _write_serial_file,
-#      _download_item_images (+_download_image_from_item_key/_keys), _queue_item_downloads,
-#      _download_worker, _prepare_download_file, _fit_partial_file, _preallocate,
-#      _download_with_chunk_verification, _download_without_chunk_verification, _download_ioloop,
-#      _report_progress, _finish_provisional_downloads, _remove_empty_subdirs.
-#    Duplicated code was merged: the two !downloading / !provisional clean-up loops, the two
-#    empty-folder loops, the three !info.txt item loops, and the three copies of the preallocation
-#    logic (Windows CreateFileW and POSIX posix_fallocate; callers still differ only where the old code
-#    did, e.g. the path used for the Windows file system lookup). Dead code removed: the unused
-#    id->item dict, ~30 lines of commented-out code in the worker. The nested closures now take the
-#    session/state as parameters. Log messages, their order per file, and file effects are unchanged.
-#    DIFFERENCE: the Windows preallocation handle is always initialised to -1. Before, if CreateFileW
-#    itself raised while growing a file that had just been moved from its final location, the error
-#    handler failed with UnboundLocalError and that download thread died.
-#
-# 10. Update speed and interruption (changed after a real log showed the problem)
-#    - cmd_update saved the manifest AND the resume manifest after every game in the default modes
-#      (-standard, -updateonly, -skipknown); only -full / -ids saved every RESUME_SAVE_THRESHOLD (50)
-#      games. A save re-formats the whole manifest with pprint (about 9 s on one real library) while
-#      fetching a game takes about 1 s, so most of a small update was spent saving. All modes now save
-#      every RESUME_SAVE_THRESHOLD games and once at the end.
-#      DIFFERENCE: if the process is killed hard (not Ctrl-C), up to 49 fetched games are lost and fetched
-#      again by the next run. Manifest and resume manifest are always saved as a pair, so resuming is safe.
-#    - Ctrl-C during the fetch loop now saves the games fetched so far and re-raises (press Ctrl-C again to
-#      skip that save; the atomic save leaves the previous files intact).
-#    - cmd_download now flushes the combined MD5 warnings when it finishes, like cmd_update. Before, they
-#      were only printed at interpreter exit, after the final "exiting..." line.
-#
-# 11. Lower CPU usage while downloading (reported: 5-10% of an 8-core CPU at only ~6 MB/s)
-#    - The read loop (_download_ioloop) read 4 KB at a time and started a NEW THREAD (threading.Timer, the
-#      stall watchdog) for every chunk: ~1500 thread creations per second per download at 6 MB/s.
-#      _StallWatchdog now uses one timer thread per response and DOWNLOAD_CHUNK_SIZE is 64 KB.
-#      Measured on a local server (CPU of the downloading process only): 22 -> 1.5 CPU-ms per MB over HTTPS
-#      (21 -> 0.8 over plain HTTP). Most of what is left is TLS decryption.
-#      Same timeout rule as before: a download is cut off after HTTP_TIMEOUT seconds without data; time spent
-#      writing a chunk does not count.
-#    DIFFERENCE: a piece of DOWNLOAD_CHUNK_SIZE must arrive within HTTP_TIMEOUT, so the slowest usable
-#      connection is about 1.1 KB/s (it was about 70 B/s). The timer thread is now a daemon thread, so it can
-#      no longer delay program exit after Ctrl-C. When a connection drops, the last incomplete piece (up to 64 KB,
-#      before: 4 KB) of that read is not written to the partial file; partial data is only ever reused in whole
-#      MD5-verified chunks and files without MD5 data restart from byte 0, so nothing of value is lost.
-#
-# 12. Default operating system and language (requested)
-#    - Before: only "update" defaulted to this computer's OS and locale (detected by taking the first two letters of
-#      locale.getlocale(), which is often empty on Windows, so it quietly fell back to English); download, verify,
-#      import and backup defaulted to every operating system and every language.
-#    - Now all five use apply_os_lang_defaults(). -os / -lang given: used as they are. Only -skipos / -skiplang
-#      given: every OS / language except those (as before; -os with -skipos and -lang with -skiplang are rejected by
-#      the parser, as before). Neither: this computer's OS and the user's language. The choice is logged
-#      ("no -os given, using ...") so it is visible what a default run does.
-#    - OS: platform.system() (Darwin = mac). Language: locale.getlocale(), then the Windows display language, then
-#      locale.getdefaultlocale(); locale names are mapped to GOG's codes (ja -> jp, cs -> cz, zh -> cn / zh,
-#      pt_BR -> br, bg -> bl, ...). If detection fails or finds nothing GOG offers: windows / en.
-#    DIFFERENCE: a plain download, verify, import or backup now handles one OS and one language instead of
-#      everything. A plain update stores only that OS and language for every game it fetches and REPLACES what the
-#      manifest held for that game, so entries for other languages / systems disappear from the manifest (the files
-#      on disk stay, but a later "clean" would treat them as orphans). Use -os / -lang (e.g. -lang en de) to keep them.
-#
-# 13. English fallback for the default language (requested)
-#    - Problem: with the default language (say de) a game that has no German version gave you nothing at all.
-#    - Now, when the language comes from the default (no -lang / -skiplang given) and is not English, English is the
-#      fallback: for every game, per list (standalone / galaxy / shared) and per operating system, the files in
-#      your language are used if there are any, otherwise the English ones. A game with German and English
-#      installers still gives only German. Example: German Windows installer + English-only Linux installer
-#      -> you get the German Windows file and the English Linux file. Languages other than German work the same
-#      (locale cn: Chinese where available, otherwise English).
-#    - The fallback applies in all five commands (update, download, verify, import, backup) through
-#      filter_languages(), and in update it is decided on GOG's data (filter_downloads) before any file information
-#      is requested. It is stored in the resume file (key 'lang_fallback'; old resume files have none = strict).
-#    - An explicit -lang (or -skiplang) is still taken literally: -lang de gives German only, -lang de en gives both.
-#    DIFFERENCE: the default language list now picks up English files for games without your language. A normal
-#      update only re-fetches new and changed games, so run "update -full" once to give the games already in your
-#      manifest their English fallback. An update REPLACES what the manifest holds for every game it fetches, so
-#      English entries that were stored for a game that also has your language are dropped from the manifest
-#      (the files on disk stay).
-#    Not handled: a language group that contains only a patch (no installer) counts as "has your language" for
-#      that system, so the English installer would not be chosen for it.
-#
-# 14. Small fix found while testing: hashfile() (used by verify, import and trash) now closes the file it reads.
-#
-# 15. Faster, still readable manifest, and an export command (requested)
-#    - The manifest and the resume manifest are now saved as indented JSON (one field per line, keys sorted, special
-#      characters not escaped) instead of Python text. Any text editor can open it. Measured with this script on a
-#      synthetic library of 1500 games (12 MB): save 3.0 s -> 0.4 s (this includes the read-back check below and the .bak
-#      copy), load 2.9 s -> 0.09 s. The plain json module alone is faster still, the rest is the safety net.
-#    - Old-format files load as before (a JSON file is recognised by its first character, '{'). -manifestformat legacy
-#      writes the old format, for example to keep using other gogrepo versions.
-#    - Safety: every JSON save is read back and compared with the data; if something would not come back exactly
-#      (tuples, non-text dict keys, NaN, ...) that save uses the old format and says so. The first JSON save over an
-#      old-format file keeps that file as <file>.legacy (made once, never overwritten); if the copy fails the format is
-#      not switched. The usual <file>.bak still holds the previous version and saves stay atomic. A damaged JSON file
-#      gives a message that points to the .bak instead of a traceback.
-#    - The JSON loader does not have a limitation of the old loader, which misread { and } in game titles (and, in resume
-#      files, in changelogs).
-#    - New command: export [-output FILE] [-savedir DIR] [-delimiter C] writes a CSV spreadsheet, one row per file
-#      (game, kind, file, operating system, language, version, size, md5, date); with -savedir an "on disk" column says
-#      yes / no / wrong size (sizes only, no checksums). UTF-8 with a byte order mark so Excel shows umlauts; the column
-#      separator is ';' for most languages and ',' for English, Japanese, Chinese, Korean, Thai and Hebrew.
-#    DIFFERENCE: the manifest file has a different layout, and other gogrepo versions cannot read the JSON layout.
-#
-# 16. Text in any language (checked after a question about Chinese characters)
-#    - Manifest (JSON and old format), log file, !info.txt / serial files and the export were already read and written
-#      as UTF-8, so Chinese, Japanese, Korean, Russian, Arabic, Thai, accents and emoji work in all of them.
-#    - Fixed: console output that is redirected on Windows (scheduled task, "> file", pipe) uses the legacy code page.
-#      A log line with characters outside it caused a "Logging error" traceback and was lost, and print() crashed.
-#      Such characters are now shown as \uXXXX escapes (the log file has the real characters).
-#
-# 17. A missing or damaged manifest: use the backup, never an empty list (requested)
-#    - Before, a manifest that was not found was treated as an empty library, so the next update would rebuild everything and
-#      overwrite the backup history; a manifest that could not be read gave a traceback.
-#    - Now, if gog-manifest.dat is not found (or is damaged, not valid UTF-8, or cannot be parsed) and gog-manifest.dat.bak
-#      exists, the program says what is wrong, shows the backup (date and size; it is the manifest as it was before the last
-#      save) and asks "Use the backup copy ... instead? [y/N]" (y, yes, j, ja). Yes: the backup is checked, restored as
-#      gog-manifest.dat (a damaged file is kept as gog-manifest.dat.damaged, never thrown away) and used.
-#    - If the answer is no (or there is no backup) and the command is 'update', a second question follows: "Start a new, empty
-#      manifest ... instead? [y/N]". Yes: the damaged file and the old backup are kept (.damaged, .oldbackup, because later saves
-#      would overwrite the backup) and update starts from scratch. No: it stops with exit status 1, and only now explains how to
-#      copy, move or delete by hand. Other commands (clean, trash, download, ...) never offer a new manifest, since an empty one
-#      is useless for them or dangerous (clean would treat every game folder as an orphan): they stop with that explanation.
-#    - A run without a terminal (scheduled task) asks nothing and stops with exit status 1 and the same explanation.
-#    - No manifest and no backup is still the normal first run. A manifest that exists but cannot be read (no permission, locked
-#      by another program) now stops with a message instead of being treated as empty. A missing resume file is normal and
-#      never asks.
-#
-# 18. End-of-run summary and exit status (requested)
-#    - Every command reports what it did, and main() logs it before the total time ("-- summary: <command>"): files downloaded
-#      (with size), already up to date, skipped, recovered from an earlier run; games added / re-checked by update; files
-#      verified, copied, imported, moved to the orphan folder, deleted. Failures are listed one per line with the reason.
-#    - Failures: a file that could not be downloaded (HTTP error, incomplete, thread crash, or never attempted) or exists twice;
-#      a game update could not fetch; a file verify found missing / with the wrong size / wrong checksum / failing the zip
-#      test; a backup source file with the wrong size; a file or folder clean / trash / clear_partial_downloads could not move
-#      or delete.
-#    - Exit status: 0, or 1 if there were failures. Fatal errors still exit with 1, Ctrl-C prints the summary of what was done
-#      so far and exits with 1. Note that verify now exits with 1 whenever it finds a problem, including files that are missing.
-#    DIFFERENCE: the exit status can now be 1 for a run that completed; an update that fails for one game still goes on with
-#      the others (and still drops that game from the resume list, as before) but now reports it.
-#
-# 19. Login: new captcha detection and a switch to force browser login (requested after GOG changed its login page)
-#    - login_form_has_captcha(): the automatic login looks for a captcha in GOG's login form before it sends the password. It
-#      now recognises both the old Google reCAPTCHA box (div "g-recaptcha form__recaptcha") and the new captcha field list
-#      (ol "form__fieldset form__fieldset--captcha", taken from a capture of the changed page). Matching is on the exact class
-#      text, as before. Before, the new page was not recognised, so the password was sent to a page that could not complete
-#      the login and the run ended with "Galaxy login failed".
-#    - New switch: login -browser (also --browser). No user name or password is asked for or sent, and GOG's login page is not
-#      read at all, so a captcha or any other change to that page cannot break it. The sign-in page's address is shown and the
-#      default browser is opened on it; the person signs in there and pastes the address the browser ends up on
-#      (.../on_login_success?...&code=...). The code in it is swapped for the token as before. Meant as the way out when the login
-#      page changes again. A user name / password given together with -browser are ignored with a warning.
-#    - The automatic login, when it meets a captcha (or cannot find the login form), still shows the address and asks for the pasted
-#      address as before; it now also points to -browser. It does not open a browser by itself.
-#    - The paste step is shared (ask_for_signed_in_url, login_code_from_url) and no longer breaks on spaces or a line break around
-#      the pasted address; the pasted address (it holds a one-time code) is never written to the log.
-#    - The login command is split into small functions (galaxy_auth_args / galaxy_auth_url, browser_login, _login_with_password,
-#      _save_login_token). The password flow itself is the old code, moved unchanged apart from the three points below.
-#    - Fixed on the way: an <input> without an id on the login page raised KeyError (now ignored); a login code that GOG refuses
-#      (used twice, too old, network problem) gave a traceback and is now a message that says what to do.
-#    DIFFERENCE: the login command now exits with status 1 when the login failed (it always exited with 0 before, also after
-#      "Galaxy login failed"), so scripts can tell. Nothing else in the normal login changed.
-#    Not checked: the real GOG login pages and token service were not reachable from where this was written. The detection was
-#      tested on small stand-in pages that contain the elements named above, not on a saved copy of GOG's page; the browser flow
-#      was tested with GOG's answers faked. Whether GOG shows Google / Discord sign-in on this page, and so whether -browser works
-#      for such accounts, is not known.
-#
-# 20. Renamed to gogrepo_delta, version 0.5.19, and a config file (gogrepo_delta.cfg)
-#    - Script file and program name are now gogrepo_delta.py (__appname__, the --version text, the User-Agent GOGRepoDelta/0.5.19).
-#      Nothing else was renamed: gogrepo.log, gog-manifest.dat, gog-token.dat, gog-resume-manifest.dat, gog-config.dat and the
-#      logger name keep their names, so an existing library and log keep working.
-#    - Config file: INI format, gogrepo_delta.cfg in the folder the program is started from (like the manifest). Set the
-#      environment variable GOGREPO_DELTA_CONFIG to use another file. When the program is started and there is no such file,
-#      it is created with every setting and every command-line flag at its default, each with an explanation (ensure_config_file;
-#      only when the script is run, not when it is imported). An existing file is never changed by the program.
-#    - [settings] holds the former hard-coded values: log_max_mb, log_backups, http_retry_count, http_retry_delay, http_timeout,
-#      http_no_retry_codes, download_chunk_size, download_threads, progress_interval (was a fixed 1 s sleep), resume_save_threshold,
-#      summary_max_items, max_listed_failures, file_replace_attempts, file_replace_delay. The built-in defaults are the old values,
-#      so without a file (or with the generated one) nothing behaves differently. They are read when the program starts, because
-#      the constants and some default arguments are built from them. A wrong value stops the program with a message that names
-#      the file, section, key and the reason; an unknown key is a warning. An empty value means "use the default".
-#      NOT moved: HTTP_FETCH_DELAY (defined but used nowhere), the GOG addresses / client id / secret, file names, the language
-#      and operating-system tables (not settings; decided with the requester).
-#    - Flag defaults: section [common] (nolog, debug, manifestformat) and one section per command, with one key per flag, named
-#      like the flag without the dash. Precedence: typed on the command line, then [command], then [common], then the built-in
-#      default. Built from the real parser (build_parser), so the file and the flags cannot drift apart.
-#        * yes/no flags: true/yes/on/1 means "as if the flag was typed" (also for the flags that turn something off);
-#          false or empty means nothing. A flag set in the file cannot be switched off from the command line (no -no-xxx); set it to false.
-#        * lists (os, lang, ids, skipfiles ...): separated by commas, or one per line; spaces inside an entry are kept.
-#        * a flag typed on the command line replaces the file's entry completely (lists are not merged) and also switches off the
-#          entries of the flags that exclude each other with it (file "os" is ignored when -skipos is typed). Two entries in the
-#          file that exclude each other are an error. Abbreviated flags (-skipo) count as typed.
-#        * folder arguments (savedir, gamedir, src_dir, dest_dir, cleandir) can be given in the file, then they may be left out.
-#          Typed folders fill a command's folders from left to right, so give all folders of a command in the file or none.
-#        * login user name and password are never read from the file.
-#        * an entry for os / lang / ids counts as typed: for lang this means the English fallback of the default language does not apply.
-#        * help and version never read the file, so a broken file cannot block them.
-#      The notes at the start of a run list what the file changed (info line "defaults from the config file ..."), only entries
-#      that differ from the built-in default.
-#    - process_argv was split into build_parser() (all flags) and process_argv() (reads the config, applies it, parses). To
-#      know which flags were really typed, the command line is parsed a second time with a parser without defaults and with
-#      optional folder arguments (_explicit_dests); this only happens when a config file with sections exists.
-#    DIFFERENCE: a file gogrepo_delta.cfg now appears in the working folder on the first run. Nothing else changes with the default content.
-#    Not checked: the real downloads and the real GOG service (as before). Windows and macOS were not tried; the config code uses
-#      only standard Python and plain relative paths, and the tests do not depend on the operating system. The file is read as
-#      UTF-8 (a byte order mark is accepted) and written as UTF-8 with the line endings of the system.
-#
-# 21. Windows: "is anybody there to answer?" (found when the tests were run on Windows 11 / Python 3.14)
-#    - _stdin_is_interactive() relied on sys.stdin.isatty(). On Windows that is also true for the NUL device (what a scheduled task
-#      or "command < NUL" gives as input), so a scheduled run printed the question "Use the backup copy ...? [y/N]", read nothing
-#      and carried on as if the answer was no, instead of saying that the run is not interactive. The outcome was the same (the
-#      run stops with exit status 1 and the manual instructions), but with a dangling question and without the explanation.
-#      On Windows it now also asks the console API (GetConsoleMode, via ctypes) whether standard input is a real console.
-#    - The tests that start the script as a subprocess now give it no input (stdin=DEVNULL); before, they inherited the input of
-#      the test runner, which on a real terminal made the script wait for an answer (a 120 s timeout in one test).
-#    Checked here: the decision logic and the way the console API is called (with a stand-in for it). Only a real Windows run can
-#      show that GetConsoleMode really answers "no" for NUL; the test test_a_missing_manifest_with_a_backup_stops_a_scheduled_run
-#      starts the real script with no input and checks for the message, so running the test suite on Windows covers it.
-#
-# 22. The generated config file is shorter and clearer (469 lines became about 230; nothing about reading the file changed)
-#    - Found when the generated file was looked at on a real machine: a blank line and a 2-3 line comment for every one of 123 entries,
-#      the same options explained again in up to five sections, and the description of a section sitting right above the comment of
-#      its first option, so that it read as part of that option's text.
-#    - Now: a header of a few lines; [settings] in six commented groups (SETTING_GROUPS) instead of one paragraph per setting (the
-#      built-in default is the value that is written, so "(default: x)" is gone; delete the file to see the defaults again); one short
-#      line per option, written by hand in CONFIG_NOTES; options that belong together (os/skipos, ids/skipids, the skip... family, ...)
-#      are listed together under one comment that names each of them ("os: ...; skipos: ..."); an option is explained where it first
-#      appears and listed without a comment in later sections, except where it means something else in another command (installers
-#      in update and trash, savedir in download and export, src_dir/dest_dir in import and backup), which get their own note;
-#      options with a fixed set of values show it ([noresume|resume|onlyresume]); no blank lines between entries.
-#    - An option without a note (a flag added later) still appears, with the first sentence of its help text. The tests insist
-#      that every option has a note, that no note names an option that does not exist, and that every setting is in exactly one group,
-#      so adding a flag means adding a line to CONFIG_NOTES. SETTINGS now has four fields (the explanation moved to SETTING_GROUPS).
-#    - An existing config file is never replaced, so a file made by the previous version keeps working as it is (checked: same keys,
-#      same sections); delete it to get the new layout.
-#    Checked with a real manifest (76 games, 217 files): export gives the same CSV with the old file, the new file and no file.
-#
-# 23. Config file: options with the same name in several commands are set once, in [common]
-#    - Requested: whoever sets a new default normally wants it for every command that has the option (os for download and update, ...),
-#      and can still override it on the command line. [common] now holds any option; an entry there counts for every command that has
-#      the option, and commands that do not have it ignore it without a warning. A [command] section overrides [common] for that command.
-#    - The generated file lists an option once, in [common], when two or more commands have it, it is of the same kind (a yes/no switch,
-#      a list, or a single value with the same type, values and default) and it means the same thing in each (the same note in
-#      CONFIG_NOTES): shared_options(). Options that differ stay in the sections of their commands: installers (a choice in update, a
-#      yes/no switch in trash), src_dir and dest_dir (different folders in import and backup). savedir (download and export) is shared.
-#      A command that has nothing of its own gets no section ([clear_partial_downloads]); the section is still accepted if written by hand.
-#    - A value in [common] that does not fit one command (installers = both for trash) is an error naming that command, only when that
-#      command is run. An entry in a command section for an option that excludes another (skipos) replaces the [common] entry of the
-#      excluded option (os) for that command; two excluding entries in the same section are an error.
-#    - The generated file went from 229 to about 190 lines. Files made by earlier versions still work (same keys; [common] is wider).
-#
-# 24. New command: list (search the manifest by name), and friendlier -ids / -skipids ("did you mean ...")
-#    - list [words] [-os ...] [-lang ...] [-format table|ids]: the games in the manifest, or those whose id, title or name contain all
-#      the words (any order, any case, accents and punctuation ignored, parts of words match; an id is found by 4 or more digits).
-#      Table columns: ID, TITLE (what -ids takes), NAME (as on GOG), OS, LANG, FILES, SIZE. -format ids prints only the titles, one per line.
-#      Reads the manifest only (no login, no network). No match: suggestions and exit status 1. The words go before the options
-#      (an option like -os takes everything after it as values). The table is on stdout, the messages are on stderr, so it can be piped.
-#    - -ids and -skipids in download, verify, import and backup now go through resolve_game_ids():
-#        * an exact title or id selects a game, as always (exact wins);
-#        * otherwise a name that differs only in case, accents, punctuation, underscores or spacing selects it, if it fits ONE game
-#          ('Beneath a Steel Sky (1994)', 'Ultima IV: Quest of the Avatar', "Baldur's Gate"); the log says what it was taken as;
-#        * a name that fits several games selects none of them and names them; a game is never selected because it looks a bit like
-#          the text (suggest_games only suggests: typos, parts of a name, other word order; at most 3, none for texts under 3 letters);
-#        * words of one name typed without quotes (-ids Beneath a Steel Sky) are recognised and the message shows the quoted form.
-#      Whatever matches no game is logged with the suggestions and recorded as a failure, so the run ends with exit status 1;
-#      the games that did match are still processed. -skipids is resolved the same way (a typo there used to skip nothing, silently);
-#      in download both are looked up among all games, so a skip id outside the games selected by -ids is not a failure.
-#    - update is NOT changed: it checks -ids against the GOG account while scanning, not against the manifest.
-#    - Names: normalize_name() keeps letters of every script as they are and only drops accents on Latin letters, so Japanese names that
-#      differ by a voiced mark stay different; trade mark signs and apostrophes are dropped, other punctuation becomes a space.
-#    DIFFERENCES: (1) -ids / -skipids names are matched more widely (long titles etc.). (2) A -ids / -skipids entry that matches no game
-#      now makes the run fail (exit status 1) and is reported, also when other ids matched, and in import and backup where it was silent;
-#      a scheduled run with a stale id in -skipids now ends with 1. (3) The notice about a newly created config file goes to stderr.
-#    Fixed on the way: with a config file present, a positional argument that takes several values (the list words) was cut to one.
-#    Checked: tests with titles in the style of a real manifest (long titles, trade marks, apostrophes, accents, Japanese, look-alike
-#      names), mutation checks, the offline download rig (old and new agree in all 69 scenarios apart from the new message in
-#      ids_not_found and the known nondeterministic order of file names in one warning: 2 of 10 runs differ for the old version
-#      compared with itself, and for the new one), and runs on a real 76-game manifest. Not checked: the real GOG service.
-#
-# 25. Bug fix: fetch_chunk_tree raised NameError for an old manifest and a signed download address (version 0.5.25)
-#    - Known since the refactoring (it was listed under the known issues). When a game has no api_downlink in the manifest (a manifest
-#      made before it was stored) and its download address carries the signed parts (wsSecret, wsTime, prefix), the warning used the
-#      name `d`, which does not exist in that function. NameError is not caught there or in the download worker (only IOError is), so
-#      the downloader thread ended with an exception and its file was left unfinished. The warning now names the file as the other
-#      warnings of the function do, and the function returns None, so the file is downloaded without chunk verification, as was
-#      intended. (The same wording in fetch_file_info is fine: `d` is its parameter.)
-#    - fetch_chunk_tree had no tests. tests/test_chunk_tree.py now covers every branch: file types without checksums, the api_downlink
-#      way, the old way with and without a signature, and every error that is caught (404, other HTTP errors, bad XML, connection
-#      and decoding errors).
-#
-# 26. Bug fix: the chunk-verification retry loop did not wait before trying again (version 0.5.26)
-#    - Known since the refactoring. When a chunk of a file that is verified against GOG's MD5 data arrives incomplete,
-#      _download_with_chunk_verification logged "will retry in Ns..." and then tried again at once, so all the retries were used up within
-#      moments, on a connection that had just failed. The plain download loop has always waited. It now waits HTTP_RETRY_DELAY
-#      (config setting http_retry_delay) before each retry, and not after the last try. It waits outside job.lock, so the other
-#      downloads are not held up (the plain loop does hold the lock while it waits; see the known issues).
-#    - tests/test_chunk_retry.py: a chunk that arrives at once needs no wait; one that fails once is retried after the delay; the number
-#      of retries and the waits between them follow the settings; no wait after the last try, after an HTTP error or after an unexpected
-#      Content-Range; the lock is free while waiting; the plain loop waits the same time.
-#    DIFFERENCE: a download with chunk verification that hits incomplete chunks now takes up to http_retry_count x http_retry_delay
-#      seconds longer before it gives up (4 x 5 s with the default settings); that is what the message always promised.
-#
-# 27. Config file: a remark about commas and lower case; the project address is the new repository (version 0.5.27)
-#    - The header of the generated file now says that lists are separated with commas (not with spaces or semicolons), and that the
-#      section names and the values of os and lang are written in lower case while option names may be in any case. That is how the
-#      program behaves (checked, and kept true by tests): "os = windows linux" and "os = windows; linux" are refused, "os = Windows" and
-#      "lang = DE" are refused, "[COMMON]" is ignored with a warning, "OS = linux" and "DryRun = true" work, and ids of games may be
-#      in any case (names are compared ignoring case). Only new files get the remark; a file made earlier is never changed.
-#    - __url__ (shown in --help) and REPO_HOME_URL (used by update_self, which is not connected to any command) now point to
-#      https://github.com/MarS301/gogrepo_delta. __author__ and the history above keep the credit to the original projects.
-#
-# 28. Bug fix: download left finished files in !provisional when nothing else needed downloading (version 0.5.28)
-#    - Known since the refactoring. An interrupted run can leave completely downloaded files in !downloading/!provisional (they are moved to
-#      their folders at the end of a run). The next run found them, but if no other file needed downloading it stopped at "nothing to
-#      download" before moving them, so they stayed there until some later run happened to download something else. Now it says
-#      "nothing else needs downloading; moving N completed file(s) ... to their place", moves them (which also resets the
-#      "needs update" flags and saves the manifest, as in a normal run), removes the empty folders, and the summary at the end counts
-#      them under "files recovered from an earlier run". With nothing left in !provisional the run still says "nothing to download".
-#    - tests/test_download.py: the rig scenario provisional_only (everything in place except one finished file in !provisional) now has
-#      tests for the file being moved, for the message, and for the summary count.
-#
-# 29. Credits; test_download_loop.py replaced by the repository owner's version (version 0.5.29)
-#    - __author__ now lists the authors of this version too: eddie3, kalaynr (the original projects), MarS301 and claude.ai.
-#    - tests/test_download_loop.py is the version written by the repository owner and is used as it is from now on. The only change
-#      against the earlier file is test_restarting_does_not_create_threads: it no longer counts all the threads of the process
-#      (other threads starting or ending at that moment could disturb the count, which showed on Windows) but checks that the stall
-#      watchdog still has the same timer thread, and that it is alive, after 20000 pause()/resume() calls. It still fails when a
-#      timer thread is started for every chunk again.
-#
-# Known issues noticed while refactoring and deliberately NOT changed:
-#    - Saving still re-formats the whole manifest with pprint on every save (the cost is proportional to
-#      the library size); a faster serialiser would change the manifest file layout.
-#    - The plain download loop (_download_without_chunk_verification) sleeps for HTTP_RETRY_DELAY while it holds job.lock, which
-#      stops the other download threads' locked work (progress lines, bookkeeping) for that time. Left as it was.
-#    - Unreachable code kept as is: the AttributeError defaults for folder_name/galaxyDownloads/
-#      sharedDownloads in cmd_download (handle_game_renames sets them first), the SSLError branch in
-#      _download_ioloop (SSLError is a ConnectionError and is caught by the branch before it) and
-#      the os.makedirs(dest_dir) in _prepare_download_file.
-#    - HTTP_FETCH_DELAY is defined but not used anywhere (so it is not in the config file).
-#    - In the combined "No MD5 data was available" warning produced while downloading (several worker threads), the order of
-#      the file names can differ from run to run. Only the order differs; seen when comparing a version with itself.
-#
-# How it was checked: the command line parser, atomic saves, combined warnings and the helper
-# functions have unit tests (tests/). cmd_download was compared with its pre-split version on 66
-# offline scenarios (local HTTP server with injected faults, fake Windows kernel32, macOS mode):
-# file tree, manifest, log lines, exceptions, HTTP requests and preallocation calls were identical in
-# 65 (apart from the two combined MD5 notices that item 10 moved to the end of the download); the 66th
-# (CreateFileW raising) shows the DIFFERENCE above. 98% of cmd_download's statements are
-# executed by the scenarios; the rest is the unreachable code listed above. tests/download_rig/
-# contains the rig so any later change can be checked the same way.
+# Based on gogrepoc by kalanyr, which is based on gogrepo by eddie3. How to use it: README.md.
+# Every change, the known issues and how the version number works: CHANGELOG.md (the version is
+# 0.5.N, where N is the number of the newest entry there). Places that were changed for an entry
+# carry a "Refactoring" comment or docstring.
 # =============================================================================================
-
+# Future idea (not implemented): optional plugin hooks for extensions; keep core/base functionality
+# in this single file and define a stable extension interface before adding any plugin loader.
+# =============================================================================================
 
 
 # imports
 import unicodedata
+import ast
+import tempfile
+import tokenize
 import difflib
 import os
 import sys
@@ -758,7 +361,8 @@ run_report = RunReport()
 
 # filepath constants
 GAME_STORAGE_DIR = r'.'
-TOKEN_FILENAME = r'gog-token.dat'
+TOKEN_FILENAME = r'gog-token.json'
+LEGACY_TOKEN_FILENAME = r'gog-token.dat'  # read-only compatibility; never overwrite or delete
 MANIFEST_FILENAME = r'gog-manifest.dat'
 RESUME_MANIFEST_FILENAME = r'gog-resume-manifest.dat'
 TEMP_EXT = r'.tmp'
@@ -769,7 +373,7 @@ INFO_FILENAME = r'!info.txt'
 
 
 #github API URLs
-REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for update_self (not connected to any command, see the known issues)
+REPO_HOME_URL = "https://api.github.com/repos/MarS301/gogrepo_delta"   # for update_self (not connected to any command, see the known issues in CHANGELOG.md)
 NEW_RELEASE_URL = "/releases/latest"
 
 # GOG URLs
@@ -1256,6 +860,44 @@ def move_with_increment_on_clash(src,dst,count=0):
     else:
         move_with_increment_on_clash(src,dst,count+1)
     
+def _attrdict_tree(value):
+    """Recursively restore AttrDict access for data loaded from a literal structure."""
+    if isinstance(value, dict):
+        result = AttrDict()
+        for key, item in value.items():
+            result[key] = _attrdict_tree(item)
+        return result
+    if isinstance(value, list):
+        return [_attrdict_tree(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_attrdict_tree(item) for item in value)
+    return value
+
+
+def _load_legacy_literal(text):
+    """Safely load historical pprint/AttrDict data without executing Python code."""
+    # Remove only the known AttrDict(**{...}) wrapper tokens. A plain text replacement of
+    # the closing ``})`` would corrupt legitimate string values containing those characters.
+    tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    remove = set()
+    for i in range(len(tokens) - 3):
+        if (tokens[i].type == tokenize.NAME and tokens[i].string == 'AttrDict'
+                and tokens[i + 1].string == '(' and tokens[i + 2].string == '**'
+                and tokens[i + 3].string == '{'):
+            depth = 0
+            for j in range(i + 3, len(tokens)):
+                if tokens[j].type == tokenize.OP and tokens[j].string == '{':
+                    depth += 1
+                elif tokens[j].type == tokenize.OP and tokens[j].string == '}':
+                    depth -= 1
+                    if depth == 0:
+                        if j + 1 < len(tokens) and tokens[j + 1].string == ')':
+                            remove.update((i, i + 1, i + 2, j + 1))
+                        break
+    literal_text = tokenize.untokenize([token for i, token in enumerate(tokens) if i not in remove])
+    return _attrdict_tree(ast.literal_eval(literal_text))
+
+
 def parse_manifest_text(ad, filepath, save_repair=True):
     """Items from the text of a manifest file (JSON or old format). Raises ManifestDamaged if it cannot be read."""
     json_items = manifest_from_json(ad)
@@ -1293,7 +935,7 @@ def parse_manifest_text(ad, filepath, save_repair=True):
 
     ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
     try:
-        db = eval(ad)
+        db = _load_legacy_literal(ad)
     except Exception as e:
         raise ManifestDamaged("%s: %s" % (type(e).__name__, e))
     if (mungeDetected and save_repair):
@@ -1636,30 +1278,44 @@ def _fsync_directory(path):
     finally:
         os.close(fd)
 
-def atomic_write_text(path, write_fn, backup_path=None):
-    """Write a UTF-8 text file so that `path` always holds either the complete
-    old content or the complete new content, never a partial file.
+def atomic_write_text(path, write_fn, backup_path=None, mode=None):
+    """Atomically write UTF-8 text using a unique temporary file in the destination directory.
 
-    write_fn(fileobj) produces the content. It is written to path + TEMP_EXT,
-    flushed to disk, and only then swapped into place with os.replace, which is
-    atomic on POSIX and Windows. If backup_path is given, the previous version
-    is copied there first. On any failure the temporary file is removed and the
-    existing file is left untouched."""
-    tmp_path = path + TEMP_EXT
+    A unique file avoids following a pre-created ``.tmp`` symlink and avoids collisions between
+    unrelated writers. Existing destination permissions are preserved unless an explicit mode
+    is supplied. ``mode`` is used for secrets such as the GOG token (0600 on POSIX).
+    """
+    directory = os.path.dirname(os.path.abspath(path))
+    legacy_tmp = path + TEMP_EXT
     try:
-        with open(tmp_path, mode='w', encoding='utf-8') as w:
+        os.remove(legacy_tmp)
+    except OSError:
+        pass
+    fd, tmp_path = tempfile.mkstemp(prefix=os.path.basename(path) + '.', suffix=TEMP_EXT, dir=directory)
+    try:
+        if mode is not None and os.name != 'nt':
+            os.chmod(tmp_path, mode)
+        w = os.fdopen(fd, mode='w', encoding='utf-8')
+        fd = None                       # the file object owns the descriptor from here on, and closes it
+        with w:
             write_fn(w)
             w.flush()
             os.fsync(w.fileno())
         if os.path.exists(path):
-            try:
-                shutil.copymode(path, tmp_path)  # keep e.g. a chmod 600 token file private
-            except OSError:
-                pass
+            if mode is None:
+                try:
+                    shutil.copymode(path, tmp_path)
+                except OSError:
+                    pass
             if backup_path is not None:
                 shutil.copyfile(path, backup_path)
         _replace_file(tmp_path, path)
     except BaseException:
+        if fd is not None:              # only when no file object took the descriptor over (closing it again would close a
+            try:                        # file that another thread opened in the meantime, which got the same number)
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.remove(tmp_path)
         except OSError:
@@ -1776,7 +1432,7 @@ def load_resume_manifest(filepath=RESUME_MANIFEST_FILENAME):
             return json_items
         ad = text.replace('{', 'AttrDict(**{').replace('}', '})')
         ad = re.sub(r"'size': ([0-9]+)L,",r"'size': \1,",ad)
-        return eval(ad)
+        return _load_legacy_literal(ad)
     except IOError:
         return []
         
@@ -1798,7 +1454,7 @@ def load_config_file(filepath=CONFIG_FILENAME):
     try:
         with open(filepath, mode='r', encoding='utf-8') as r:
             ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
-        return eval(ad)
+        return _load_legacy_literal(ad)
     except IOError:
         return []
 def open_notrunc(name, bufsize=4*1024):
@@ -1989,7 +1645,10 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
         except UnicodeEncodeError:
             pass
 
-    if olditem.changelog != newitem.changelog and newitem.changelog not in [None, '']:
+    # Older gogrepoc manifests may not contain a changelog key.
+    old_changelog = getattr(olditem, 'changelog', '')
+    new_changelog = getattr(newitem, 'changelog', '')
+    if old_changelog != new_changelog and new_changelog not in (None, ''):
         info('  -> changelog was updated')
 
     try:
@@ -3039,13 +2698,24 @@ def cmd_list(words, os_list, skipos_list, lang_list, skiplang_list, output_forma
         candidates.append(game)
     found = search_games(candidates, words)
     if not found:
+        shown = ' '.join(words)
+        filter_text = '; '.join(part for part in ('-os ' + ' '.join(os_list) if os_list else '', '-skipos ' + ' '.join(skipos_list) if skipos_list else '',
+                                                  '-lang ' + ' '.join(lang_list) if lang_list else '', '-skiplang ' + ' '.join(skiplang_list) if skiplang_list else '') if part)
+        filter_note = ' The filter in use is: %s (typed, or the defaults from the config file).' % filter_text if filter_text else ''
         if words:
-            suggestions = suggest_games(candidates, ' '.join(words))
-            error("no game matches '%s'.%s" % (' '.join(words), ' Did you mean: %s?' % '; '.join(describe_game(g) for g in suggestions)
-                                              if suggestions else ''))
-            run_report.fail('list %s' % ' '.join(words), 'no game matches')
+            hidden = search_games(items, words) if filtered else []        # the games the words fit, before the filter took some out
+            if hidden:
+                names = ', '.join(game.title for game in hidden[:5]) + (' and %d more' % (len(hidden) - 5) if len(hidden) > 5 else '')
+                error("%d game%s match%s '%s' (%s) but none has files for the chosen operating system / language.%s"
+                      % (len(hidden), '' if len(hidden) == 1 else 's', 'es' if len(hidden) == 1 else '', shown, names, filter_note))
+                run_report.fail('list %s' % shown, 'no matching game has files for this operating system / language')
+            else:
+                suggestions = suggest_games(items, shown)
+                error("no game matches '%s'.%s" % (shown, ' Did you mean: %s?' % '; '.join(describe_game(g) for g in suggestions)
+                                                  if suggestions else ''))
+                run_report.fail('list %s' % shown, 'no game matches')
         elif filtered:
-            error('no game has files for this operating system / language')
+            error('no game has files for this operating system / language.%s' % filter_note)
             run_report.fail('list', 'no game has files for this operating system / language')
         else:
             info('the manifest has no games')
@@ -3635,6 +3305,11 @@ def ensure_config_file():
 
 
 
+def version_line():
+    """The first line of a run in the log: the version of the program, and the Python and system it ran on."""
+    return '%s version %s (Python %s, %s)' % (__appname__, __version__, platform.python_version(), platform.platform())
+
+
 def process_argv(argv):
     p1, sp1 = build_parser()
     config_notes, config_problems = [], []
@@ -3652,6 +3327,8 @@ def process_argv(argv):
     
     if not args.nolog:
         rootLogger.addHandler(loggingHandler)
+        # The first line of the run in the log file (not on the console): which version of the program wrote it.
+        loggingHandler.handle(rootLogger.makeRecord(rootLogger.name, logging.INFO, __file__, 0, version_line(), (), None))
         
     if not args.debug:     
         rootLogger.setLevel(logging.INFO)
@@ -3906,31 +3583,219 @@ def makeGOGSession(loginSession=False):
             sys.exit(1)
     return gogSession
 
+# Token storage defaults to password-protected AES-256-GCM. Set GOGREPO_TOKEN_MODE=plain
+# explicitly for unattended machines; this writes readable JSON and is not encrypted.
+TOKEN_MODE_ENV = 'GOGREPO_TOKEN_MODE'
+_TOKEN_PASSWORD = None
+_TOKEN_ENVELOPE_FORMAT = 'gogrepo-token'
+_TOKEN_ENVELOPE_VERSION = 1
+_TOKEN_SCRYPT_N = 2 ** 14
+_TOKEN_SCRYPT_R = 8
+_TOKEN_SCRYPT_P = 1
+
+
+def _token_mode():
+    mode = os.environ.get(TOKEN_MODE_ENV, 'encrypted').strip().lower()
+    if mode not in ('encrypted', 'plain'):
+        raise ValueError('%s must be "encrypted" or "plain"' % TOKEN_MODE_ENV)
+    return mode
+
+
+def _token_crypto():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        raise RuntimeError('Encrypted token storage requires the "cryptography" package. Install it with: python -m pip install cryptography')
+    return AESGCM
+
+
+def _token_password(create=False):
+    """Ask once per process; never persist the password or accept it on the command line."""
+    global _TOKEN_PASSWORD
+    if _TOKEN_PASSWORD is None:
+        if create:
+            first = getpass.getpass('Create password for gog-token.json: ')
+            second = getpass.getpass('Confirm token password: ')
+            if not first:
+                raise ValueError('Token password must not be empty')
+            if first != second:
+                raise ValueError('Token passwords do not match')
+            _TOKEN_PASSWORD = first
+        else:
+            _TOKEN_PASSWORD = getpass.getpass('Password for gog-token.json: ')
+            if not _TOKEN_PASSWORD:
+                raise ValueError('Token password must not be empty')
+    return _TOKEN_PASSWORD
+
+
+def _token_key(password, salt, n=_TOKEN_SCRYPT_N, r=_TOKEN_SCRYPT_R, p=_TOKEN_SCRYPT_P):
+    return hashlib.scrypt(password.encode('utf-8'), salt=salt, n=n, r=r, p=p, dklen=32)
+
+
+def _write_token_json(token, filepath):
+    mode = _token_mode()
+    envelope = {
+        'format': _TOKEN_ENVELOPE_FORMAT,
+        'version': _TOKEN_ENVELOPE_VERSION,
+        'encryption': mode,
+    }
+    if mode == 'plain':
+        envelope['token'] = token
+    else:
+        AESGCM = _token_crypto()
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+        password = _token_password(create=not os.path.exists(filepath))
+        key = _token_key(password, salt)
+        ciphertext = AESGCM(key).encrypt(nonce, json.dumps(token, separators=(',', ':')).encode('utf-8'),
+                                         _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
+        envelope.update({
+            'kdf': 'scrypt',
+            'kdf_n': _TOKEN_SCRYPT_N,
+            'kdf_r': _TOKEN_SCRYPT_R,
+            'kdf_p': _TOKEN_SCRYPT_P,
+            'salt': __import__('base64').b64encode(salt).decode('ascii'),
+            'nonce': __import__('base64').b64encode(nonce).decode('ascii'),
+            'ciphertext': __import__('base64').b64encode(ciphertext).decode('ascii'),
+        })
+    atomic_write_text(filepath, lambda w: json.dump(envelope, w, indent=2, sort_keys=True), mode=0o600)
+
+
+def _read_token_json(filepath):
+    with open(filepath, mode='r', encoding='utf-8') as r:
+        envelope = json.load(r)
+    if not isinstance(envelope, dict) or envelope.get('format') != _TOKEN_ENVELOPE_FORMAT:
+        raise ValueError('unrecognised token file format in %s' % filepath)
+    if envelope.get('version') != _TOKEN_ENVELOPE_VERSION:
+        raise ValueError('unsupported token file version in %s' % filepath)
+    encryption = envelope.get('encryption')
+    if encryption == 'plain':
+        token = envelope.get('token')
+    elif encryption == 'encrypted':
+        if envelope.get('kdf') != 'scrypt':
+            raise ValueError('unsupported token key derivation function')
+        AESGCM = _token_crypto()
+        import base64
+        salt = base64.b64decode(envelope['salt'], validate=True)
+        nonce = base64.b64decode(envelope['nonce'], validate=True)
+        ciphertext = base64.b64decode(envelope['ciphertext'], validate=True)
+        if len(salt) != 16 or len(nonce) != 12:
+            raise ValueError('invalid encrypted token parameters')
+        key = _token_key(_token_password(), salt, int(envelope['kdf_n']), int(envelope['kdf_r']), int(envelope['kdf_p']))
+        try:
+            plaintext = AESGCM(key).decrypt(nonce, ciphertext, _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
+        except Exception:
+            # Do not fall back to the legacy token file on a bad password or damaged ciphertext.
+            raise ValueError('could not decrypt token file (wrong password or damaged file)')
+        token = json.loads(plaintext.decode('utf-8'))
+    else:
+        raise ValueError('unsupported token encryption mode: %r' % encryption)
+    if not isinstance(token, dict):
+        raise ValueError('token file does not contain a JSON object')
+    return token
+
+
 def save_token(token):
     info('saving token...')
-    def write(w):
-        pprint.pprint(token, width=123, stream=w)
+    filepath = TOKEN_FILENAME
     try:
-        atomic_write_text(TOKEN_FILENAME, write)
+        _write_token_json(token, filepath)
         info('saved token')
     except KeyboardInterrupt:
-        atomic_write_text(TOKEN_FILENAME, write)
-        info('saved token')            
+        _write_token_json(token, filepath)
+        info('saved token')
         raise
 
-def load_token(filepath=TOKEN_FILENAME):
+
+def load_token(filepath=None):
+    """Read the new JSON token first; read the legacy .dat file only when JSON is absent."""
     info('loading token...')
-    try:
-        with open(filepath, mode='r', encoding='utf-8') as r:
-            ad = r.read().replace('{', 'AttrDict(**{').replace('}', '})')
-        return eval(ad)
-    except IOError:
-        return {}
-        
+    if filepath is not None:
+        # Explicit paths are useful to callers/tests and refer to the new JSON format.
+        try:
+            return _read_token_json(filepath)
+        except FileNotFoundError:
+            return {}
+    if os.path.exists(TOKEN_FILENAME):
+        # A corrupt or undecryptable JSON file is an error, never a reason to use stale legacy data.
+        return _read_token_json(TOKEN_FILENAME)
+    if os.path.exists(LEGACY_TOKEN_FILENAME):
+        with open(LEGACY_TOKEN_FILENAME, mode='r', encoding='utf-8') as r:
+            legacy = _load_legacy_literal(r.read())
+        if not isinstance(legacy, dict):
+            raise ValueError('legacy token file does not contain a dictionary')
+        # Migration writes only the new file; the legacy file is left untouched.
+        save_token(legacy)
+        return legacy
+    return {}
+
 def input_timeout(*ignore):
     raise TimeoutError
 
         
+
+class UpdateNarrowing(object):
+    """What an update with these operating-system and language lists would take out of the manifest (see update_narrowing)."""
+    def __init__(self):
+        self.files = 0             # installer entries that no longer fit
+        self.games = 0             # in this many games
+        self.os_types = set()      # entries dropped because of their operating system
+        self.languages = set()     # entries dropped because of their language
+
+
+def update_narrowing(gamesdb, os_list, lang_list, lang_fallback, ids, skipids):
+    """The installer entries in the manifest that an update with these lists would drop, for the games it could fetch (all of them, or the
+    ones named by ids, without skipids). An update replaces the installers of every game it fetches by the ones for the chosen operating
+    systems and languages, with the same filter that it uses (filter_languages, with the English fallback of the default language);
+    extras are not filtered by an update, so they do not count."""
+    result = UpdateNarrowing()
+    if not gamesdb or not os_list or not lang_list:
+        return result
+    valid_langs = [LANG_TABLE[lang] for lang in lang_list]
+    fallback_name = LANG_TABLE[lang_fallback] if lang_fallback else None
+    games = gamesdb
+    if ids:
+        selected = resolve_game_ids(gamesdb, ids).selected
+        games = [game for game in games if game.id in selected]
+    if skipids:
+        skipped = resolve_game_ids(gamesdb, skipids).selected
+        games = [game for game in games if game.id not in skipped]
+    for game in games:
+        dropped = []
+        for kind in ('downloads', 'galaxyDownloads', 'sharedDownloads'):
+            entries = getattr(game, kind, [])
+            kept = set(id(entry) for entry in filter_languages([e for e in entries if e.os_type in os_list], valid_langs, fallback_name))
+            dropped += [entry for entry in entries if id(entry) not in kept]
+        if dropped:
+            result.games += 1
+            result.files += len(dropped)
+            for entry in dropped:
+                if entry.os_type not in os_list:
+                    result.os_types.add(entry.os_type)
+                else:
+                    result.languages.add(entry.lang)
+    return result
+
+
+def warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, ids, skipids, partial):
+    """Warns (only warns) when the update that is about to start would remove installer entries for other operating systems or
+    languages from the manifest. The files stay on disk, but 'clean' would take them for orphans, and a later update that includes
+    them adds the entries back as new ones, which download then has to check again (it does not download them again if they are right)."""
+    found = update_narrowing(gamesdb, os_list, lang_list, lang_fallback, ids, skipids)
+    if not found.files:
+        return
+    reasons = ' and '.join(part for part in (
+        'operating system(s) %s' % ', '.join(sorted(found.os_types)) if found.os_types else '',
+        'language(s) %s' % ', '.join(sorted(found.languages)) if found.languages else '') if part)
+    warn('This update is limited to operating system(s) %s and language(s) %s, but the manifest also holds %s%d installer file(s) of %d game(s) '
+         'for %s.' % (', '.join(os_list), ', '.join(lang_list), 'up to ' if partial else '', found.files, found.games, reasons))
+    warn('For %s these entries are removed from the manifest. The files stay on disk, but \'clean\' would move them to %s, and a later update that '
+         'includes them again has them added back as new entries (download then checks them, and fetches only what is not right).'
+         % ('the games that this update fetches (the new and updated ones, or the ones named with -ids)' if partial
+            else 'every game that this update fetches (all games, or the ones named with -ids)', ORPHAN_DIR_NAME))
+    warn('If that is not what you want, stop now (Ctrl-C) and run update again with all the operating systems and languages that you use '
+         '(-os, -lang), or put them into the config file.')
+
 
 def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None):
     media_type = GOG_MEDIA_TYPE_GAME
@@ -4057,6 +3922,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         for item in gamesdb:
             known_titles.append(item.title)
 
+        warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, ids, skipids, partial)
             
         # Fetch shelf data
         done = False
@@ -4657,7 +4523,7 @@ def cmd_import(src_dir, dest_dir,os_list,lang_list,skipextras,skipids,ids,skipga
 #
 # Refactoring: cmd_download used to be a single ~925 line function with nested closures. It is now
 # a short orchestrator that calls the helpers below. Behaviour, log messages and file effects are
-# unchanged (see the "Refactoring notes" at the top of this file for the few intended differences).
+# unchanged (see CHANGELOG.md for the few intended differences).
 #
 #   selection / bookkeeping   _select_download_items, _index_items_by_title, _clean_work_dir
 #   per game                  _process_download_item -> _item_download_lists, _write_info_file,
@@ -4688,6 +4554,7 @@ class _DownloadJob(object):
         self.skippreallocation = skippreallocation
         self.downloadLimit = downloadLimit
         self.sizes, self.rates, self.errors = {}, {}, {}
+        self.transferred = {}                     # dest_file -> bytes really received from GOG in this run (for the run summary)
         self.work = Queue()                       # files still to download
         self.work_provisional = Queue()           # completed files waiting to be moved to their final place
         self.work_dict = dict()                   # dest_file -> work item, becomes self.work
@@ -5184,6 +5051,7 @@ def _download_ioloop(job, tid, path, response, out):
                 dlsz = dlsz + sz
                 with job.lock:
                     job.sizes[path] -= sz
+                    job.transferred[path] = job.transferred.get(path, 0) + sz
                     job.rates.setdefault(path, []).append((tid, (sz, dt)))
             watchdog.resume()
     except (requests.exceptions.ConnectionError,requests.packages.urllib3.exceptions.ProtocolError) as e:
@@ -5192,7 +5060,11 @@ def _download_ioloop(job, tid, path, response, out):
         error("SSL issue while downloading content for %s" % (path))
     except (requests.exceptions.ChunkedEncodingError) as e:
         error("Encoding Error In Chunk for %s" %  (path))
-    watchdog.stop()
+    finally:
+        watchdog.stop()
+        close = getattr(response, 'close', None)
+        if close is not None:
+            close()
     #info("Exiting I/O Loop - " + path)
     return dlsz            
 
@@ -5381,6 +5253,9 @@ def _download_without_chunk_verification(job, tid, href, path, downloading_path,
                               % (start, end, sz, hdr))
                         succeed = False
                         retries = -1
+                    close = getattr(response, 'close', None)
+                    if close is not None:
+                        close()
                 else:
                     out.seek(start)
                     assert out.tell() == start
@@ -5391,13 +5266,14 @@ def _download_without_chunk_verification(job, tid, href, path, downloading_path,
                     else:
                         with job.lock:
                             job.sizes[path] += dlsz
-                            if (retries > 0):
-                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se),retries,HTTP_RETRY_DELAY))
-                                time.sleep(HTTP_RETRY_DELAY)
+                            if retries > 0:
+                                warn("failed to download %s, byte_range=%s (%d retries left) -- will retry in %ds..." % (os.path.basename(path), str(se), retries, HTTP_RETRY_DELAY))
                             else:
                                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
-                                succeed = False;
-                            retries = retries -1 
+                                succeed = False
+                            retries -= 1
+                        if retries >= 0:
+                            time.sleep(HTTP_RETRY_DELAY)
             except requests.HTTPError as e:
                 error("failed to download %s, byte_range=%s" % (os.path.basename(path), str(se)))
                 succeed = False
@@ -5493,8 +5369,13 @@ def _finish_provisional_downloads(job):
         info("moving provisionally completed download '%s' to '%s'  " % (provisional_path,path))
         shutil.move(provisional_path,path)
         job.completed.add(path)
-        run_report.count('files recovered from an earlier run' if path in job.provisional_dict else 'files downloaded', 1,
-                         getattr(writable_game_item, 'size', None) if writable_game_item is not None else None)
+        size = getattr(writable_game_item, 'size', None) if writable_game_item is not None else None
+        if path in job.provisional_dict:
+            run_report.count('files recovered from an earlier run', 1, size)
+        elif job.transferred.get(path, 0) > 0:
+            run_report.count('files downloaded', 1, job.transferred[path])        # the data that really came from GOG
+        else:                                         # marked for change, but chunk by chunk it was already right: no transfer
+            run_report.count('files verified in place (nothing downloaded)', 1, size)
         if writable_game_item != None:
             try:
                 _ = writable_game_item.force_change
