@@ -923,7 +923,8 @@ def handle_game_renames(savedir,gamesdb,dryrun):
     orphan_root_dir = os.path.join(savedir, ORPHAN_DIR_NAME)
     if not os.path.isdir(orphan_root_dir):
         os.makedirs(orphan_root_dir)
-
+    have_renamed = False;
+    
     for game in gamesdb:
         try:
             _ = game.galaxyDownloads
@@ -958,6 +959,8 @@ def handle_game_renames(savedir,gamesdb,dryrun):
                     info('  -> renaming directory "{}" -> "{}"'.format(src_dir, dst_dir))            
                     if not dryrun:                    
                         move_with_increment_on_clash(src_dir,dst_dir)
+                        game.old_folder_name = None #only once
+                        have_renamed = True;
                 except Exception: 
                     error('    -> rename failed "{}" -> "{}"'.format(game.old_folder_name, game.folder_name))
         for item in game.downloads+game.galaxyDownloads+game.sharedDownloads+game.extras:
@@ -971,24 +974,36 @@ def handle_game_renames(savedir,gamesdb,dryrun):
                 src_file =  os.path.join(game_dir,item.old_name)
                 dst_file =  os.path.join(game_dir,item.name)
                 if os.path.isfile(src_file):
+                    already_exists = False;
                     try:
                         if os.path.exists(dst_file):
-                            warn("orphaning destination clash '{}'".format(dst_file))
-                            dest_dir = os.path.join(orphan_root_dir, game.folder_name)
-                            if not os.path.isdir(dest_dir):
+                            if item.size is not None and item.md5 is not None and item.size == os.path.getsize(dst_file) and item.md5 == hashfile(dst_file):
+                                already_exists = True;
+                            else:                            
+                                warn("orphaning destination clash '{}'".format(dst_file))
+                                dest_dir = os.path.join(orphan_root_dir, game.folder_name)
+                                if not os.path.isdir(dest_dir):
+                                    if not dryrun:
+                                        os.makedirs(dest_dir)
                                 if not dryrun:
-                                    os.makedirs(dest_dir)
+                                    move_with_increment_on_clash(dst_file, os.path.join(dest_dir,item.name))
+                        if (already_exists):
+                            info('  -> skipping renaming file "{}" -> "{} as {} already exists and has the correct size and MD5 hash"'.format(src_file, dst_file, dst_file) )
                             if not dryrun:
-                                move_with_increment_on_clash(dst_file, os.path.join(dest_dir,item.name))
-                        info('  -> renaming file "{}" -> "{}"'.format(src_file, dst_file))
-                        if not dryrun:
-                            move_with_increment_on_clash(src_file,dst_file)
-                            item.old_name = None #only once
+                                item.old_name = None #Clear, so we don't keep retrying
+                                have_renamed = True; #Not technically true but it is true that a manifest commit should be forced.
+                        else:    
+                            info('  -> renaming file "{}" -> "{}"'.format(src_file, dst_file))
+                            if not dryrun:
+                                move_with_increment_on_clash(src_file,dst_file)
+                                item.old_name = None #only once
+                                have_renamed = True;
                     except Exception:
                         error('    -> rename failed "{}" -> "{}"'.format(src_file, dst_file))
                         if not dryrun:
                             item.prev_verified = False
-                    
+                            have_renamed = True; #Not technically true but it is true that a manifest commit should be forced.
+    return have_renamed
             
 
 def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update_extras_strict):
@@ -2950,7 +2965,10 @@ def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,ski
             error('no game found')      
         exit(1)
 
-    handle_game_renames(savedir,items,dryrun)
+    commit_manifest = handle_game_renames(savedir,items,dryrun)
+    if commit_manifest:
+        if not dryrun: # Guard should be unncessary but manifest is important enough not to risk it 
+           save_manifest(all_items)    
 
     #writable_items = load_manifest() #Load unchanged item list, so we don't save the filtering stuff.
     all_items_by_id = {}
@@ -3995,8 +4013,9 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
         formattedSkipFiles = "'" + "', '".join(skipfiles) + "'"
         info("skipping files that match: {%s}" % formattedSkipFiles)
     
-    handle_game_renames(gamedir,items,False)
-        
+    commit_manifest = handle_game_renames(gamedir,items,False)
+    if commit_manifest:
+        save_manifest(items)
     
     if clean_on_fail:
         # create orphan root dir
@@ -4255,9 +4274,9 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
             if folders:
                 if relaxed or os.path.isdir(reference_dir):
                     try:
+                        info("Deleting " + testdir)
                         if (not dryrun):
                             shutil.rmtree(testdir)
-                        info("Deleting " + testdir)
                     except Exception:
                         error("Failed to delete directory: " + testdir)
             if os.path.isdir(testdir): 
@@ -4266,10 +4285,10 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                     images_folder = os.path.join(testdir,IMAGES_DIR_NAME)
                     if os.path.isdir(images_folder):
                         if relaxed or os.path.isdir(os.path.join(reference_dir,IMAGES_DIR_NAME)):
+                            info("Deleting " + images_folder )
                             if (not dryrun):
                                 shutil.rmtree(images_folder)
                                 refresh_contents=True
-                            info("Deleting " + images_folder )
                 if (refresh_contents):
                     contents = os.listdir(testdir)
                     refresh_contents = False
@@ -4277,10 +4296,10 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                     deletecontents = [x for x in contents if (len(x.rsplit(os.extsep,1)) > 1 and (os.extsep + x.rsplit(os.extsep,1)[1]) in INSTALLERS_EXT)]
                     for content in deletecontents:
                         contentpath = os.path.join(testdir,content)
+                        info("Deleting " + contentpath )
                         if (not dryrun):
                             os.remove(contentpath)
                             refresh_contents=True
-                        info("Deleting " + contentpath )
                 if (refresh_contents):
                     contents = os.listdir(testdir)
                     refresh_contents = False
@@ -4292,10 +4311,10 @@ def cmd_trash(cleandir,installers,images,folders,relaxed,dryrun):
                         reference_content_path = os.path.join(reference_dir,content)
                         if os.path.isfile(reference_content_path):
                             if relaxed or ( os.path.getsize(content_path) == os.path.getsize(reference_content_path) and hashfile(content_path) == hashfile(reference_content_path)):
+                                info("Deleting " + content_path )                          
                                 if (not dryrun):
                                     os.remove(content_path)
                                     refresh_contents=True
-                                info("Deleting " + content_path )                          
                 if (refresh_contents):
                     contents = os.listdir(testdir)
                     refresh_contents = False
@@ -4355,7 +4374,11 @@ def cmd_clean(cleandir, dryrun):
             os.makedirs(orphan_root_dir)
 
     info("scanning local directories within '{}'...".format(cleandir))
-    handle_game_renames(cleandir,items,dryrun)
+    commit_manifest = handle_game_renames(cleandir,items,dryrun)
+    if commit_manifest:
+        if not dryrun: # Guard should be unncessary but manifest is important enough not to risk it 
+           save_manifest(items)
+
     for cur_dir in sorted(os.listdir(cleandir)):
         changed_game_items = {}
         cur_fulldir = os.path.join(cleandir, cur_dir)
