@@ -7,9 +7,9 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.36-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.37-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
 
 </div>
@@ -22,11 +22,23 @@ library and helps you maintain a dependable, verifiable local collection.
 > This is an independent community project. It is not affiliated with, endorsed by, or
 > supported by GOG.
 
+> [!WARNING]
+> **New token storage.** New logins save credentials in `gog-token.json`, encrypted by default with a
+> password you choose. Encrypted mode requires the third-party `cryptography` package
+> (`python -m pip install cryptography`). The password is requested once per process and is never stored.
+>
+> - **Unattended machines:** set `GOGREPO_TOKEN_MODE=plain` explicitly. This stores the token as readable
+>   JSON and provides **no encryption**.
+> - **Existing `gog-token.dat` files** are read only when `gog-token.json` is absent. Their contents are
+>   migrated to the new file; the legacy file is never modified or deleted.
+> - **Damaged file or wrong password:** the program reports the problem rather than silently using an
+>   older token.
+
 ## Project at a glance
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.36` |
+| **Current version** | `v0.5.37` |
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -43,6 +55,7 @@ library and helps you maintain a dependable, verifiable local collection.
   - [2. Update the manifest](#2-update-the-manifest)
   - [3. Download games and extras](#3-download-games-and-extras)
   - [4. Verify your collection](#4-verify-your-collection)
+  - [5. Keep the collection up to date](#5-keep-the-collection-up-to-date)
 - [Commands](#commands)
   - [login](#login)
   - [update](#update)
@@ -94,11 +107,12 @@ library and helps you maintain a dependable, verifiable local collection.
 - `html5lib`
 - `requests`
 - `psutil`
+- `cryptography` (for the default encrypted token storage; not needed with `GOGREPO_TOKEN_MODE=plain`)
 
 Install the required packages:
 
 ```bash
-python -m pip install html5lib requests psutil
+python -m pip install html5lib requests psutil cryptography
 ```
 
 Download `gogrepo_delta.py` into a working directory and run it with Python:
@@ -131,7 +145,7 @@ Run the commands below from the directory in which you want the program's workin
 python gogrepo_delta.py login
 ```
 
-Enter your GOG username/email when prompted. If the password is not supplied as an argument, it is requested securely.
+Enter your GOG username/email when prompted. If the password is not supplied as an argument, it is requested securely. You will then be asked to create a password that protects the saved token (see the notice above).
 
 If automatic login is blocked by a CAPTCHA or a changed GOG login page, use browser login:
 
@@ -139,7 +153,7 @@ If automatic login is blocked by a CAPTCHA or a changed GOG login page, use brow
 python gogrepo_delta.py login --browser
 ```
 
-A browser sign-in page is opened (or its address is displayed). Sign in, then paste the resulting URL when prompted. The authentication token is stored locally in `gog-token.dat`.
+A browser sign-in page is opened (or its address is displayed). Sign in, then paste the resulting URL when prompted. The authentication token is stored locally in `gog-token.json`.
 
 **Security:** Do not pass your password on the command line. Command-line passwords can be exposed through shell history and process listings; this form is deprecated.
 
@@ -449,7 +463,8 @@ The program keeps its state files in the current working directory (unless confi
 | File | Purpose |
 | --- | --- |
 | `gogrepo_delta.cfg` | Configuration and command defaults. |
-| `gog-token.dat` | Saved GOG authentication token. Treat it as a credential. |
+| `gog-token.json` | Saved GOG authentication token (encrypted by default). Treat it as a credential. |
+| `gog-token.dat` | Legacy token file from older versions. Read-only; never modified or deleted. |
 | `gog-manifest.dat` | Main library manifest (JSON by default). |
 | `gog-manifest.dat.bak` | Previous manifest version. |
 | `gog-manifest.dat.legacy` | One-time preservation of the old manifest format during migration. |
@@ -472,7 +487,7 @@ JSON saves are checked by reading the data back. If it cannot be represented wit
 
 If the manifest is missing or damaged and a backup exists, the program offers an interactive restore. A damaged manifest is preserved with a `.damaged` suffix. In non-interactive runs, it stops rather than asking an unanswered question or silently treating a damaged manifest as an empty library. A first run with neither manifest nor backup is normal.
 
-**Back up `gog-token.dat` securely** if you want to preserve the login session, and do not share it in bug reports.
+**Back up `gog-token.json` securely** if you want to preserve the login session, and do not share it in bug reports.
 
 ## Logging and exit codes
 
@@ -482,11 +497,13 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.35 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.37 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
 
 At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 
-When a chunk download is incomplete, the chunk-verification retry loop waits for `http_retry_delay` before each retry, except after the final attempt. The wait occurs outside the download job lock, so other downloads can proceed. With the default settings, retry delays can add up to 20 seconds (4 retries × 5 seconds) before the download gives up. Exit status:
+When a chunk download is incomplete, the chunk-verification retry loop waits for `http_retry_delay` before each retry, except after the final attempt. The wait occurs outside the download job lock, so other downloads can proceed. With the default settings, retry delays can add up to 20 seconds (4 retries × 5 seconds) before the download gives up.
+
+**Exit status:**
 
 - `0`: command completed without reported failures.
 - `1`: one or more failures occurred, a fatal error occurred, or the run was interrupted.
@@ -506,7 +523,7 @@ A command can therefore complete most of its work and still return `1`. This is 
 
 - Current repository: [MarS301/gogrepo_delta](https://github.com/MarS301/gogrepo_delta)
 - Original projects: `eddie3` and `kalanyr`
-- Current version contributors: `MarS301` and `claude.ai`
+- Current version contributors: `MarS301`, `claude.ai` and `chatgpt`
 - GOG: [https://www.gog.com/](https://www.gog.com/)
 
 See [CHANGELOG.md](CHANGELOG.md) for the changes documented for this version.
@@ -515,7 +532,6 @@ See [CHANGELOG.md](CHANGELOG.md) for the changes documented for this version.
 
 Every change, newest first, the known issues and the rule for the version number (`0.5.N`, where N is the number of the newest entry) are in [CHANGELOG.md](CHANGELOG.md).
 
-
 ---
 
 <div align="center">
@@ -523,13 +539,3 @@ Every change, newest first, the known issues and the rule for the version number
 **Preserve your library. Verify your files. Keep control of your collection.**
 
 </div>
-
-
-## Token storage
-
-New logins save credentials in `gog-token.json`, encrypted by default with a password you choose. Encrypted mode requires the third-party `cryptography` package (`python -m pip install cryptography`).
-The password is requested once per process and is not stored. For an unattended machine, set `GOGREPO_TOKEN_MODE=plain` explicitly;
-this stores the token as readable JSON and provides no encryption. Existing `gog-token.dat` files
-are read only when `gog-token.json` is absent. Their contents are migrated to the new file, but
-the legacy file is never modified or deleted. If the JSON file is damaged or its password is
-wrong, the program reports the problem rather than silently using an older token.
