@@ -130,7 +130,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_data_files_and_log_keep_their_names(self):
         self.assertEqual((g.MANIFEST_FILENAME, g.TOKEN_FILENAME, g.RESUME_MANIFEST_FILENAME, g.CONFIG_FILENAME),
-                         ('gog-manifest.dat', 'gog-token.dat', 'gog-resume-manifest.dat', 'gog-config.dat'))
+                         ('gog-manifest.dat', 'gog-token.json', 'gog-resume-manifest.dat', 'gog-config.dat'))
         self.assertEqual(os.path.basename(g.loggingHandler.baseFilename), 'gogrepo.log')
 
 
@@ -944,7 +944,7 @@ class ProjectAddressTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             g.process_argv(['gogrepo_delta.py', '--help'])
         self.assertIn('https://github.com/MarS301/gogrepo_delta', out.getvalue())
-        self.assertEqual(g.__author__.split(','), ['eddie3', 'kalanyr', 'MarS301', 'claude.ai'])    # the original authors, then this version's
+        self.assertEqual(g.__author__.split(','), ['eddie3', 'kalanyr', 'MarS301', 'claude.ai', 'chatgpt'])    # the original authors, then this version's
 
 
 class EnsureConfigFileTests(ConfigTestCase):

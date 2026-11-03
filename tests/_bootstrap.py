@@ -42,3 +42,7 @@ gogrepoc.rootLogger.addHandler(__import__('logging').NullHandler())   # no handl
 # that exercise them pretend to be on one (and to type the answers) explicitly.
 gogrepoc._real_stdin_is_interactive = gogrepoc._stdin_is_interactive    # for the tests of the check itself (test_interactive)
 gogrepoc._stdin_is_interactive = lambda: False
+
+# Nor may any test ever prompt for a password on the console (token encryption asks for one). Tests that care about the
+# prompt patch getpass themselves; every other test silently gets this fixed throw-away password.
+gogrepoc.getpass.getpass = lambda prompt='Password: ', stream=None: 'test-password'
