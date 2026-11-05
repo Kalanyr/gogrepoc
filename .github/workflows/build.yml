@@ -18,11 +18,6 @@ jobs:
             ext: .exe
             archive_ext: zip
 
-          - runs_on: windows-11-arm
-            platform: win-arm64
-            ext: .exe
-            archive_ext: zip
-
           # Linux binaries are built on the oldest runner image offered, because a PyInstaller
           # binary needs at least the glibc version of the machine it was built on.
           - runs_on: ubuntu-22.04
@@ -60,6 +55,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install html5lib requests psutil cryptography html2text blake3 pyinstaller
+
+      # gogrepo_delta.py imports CoreFoundation on macOS, which is provided by PyObjC.
+      - name: Install macOS-only dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          pip install pyobjc-framework-CoreFoundation
 
       - name: Run tests
         shell: bash
