@@ -107,7 +107,18 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          pyinstaller --onefile --name "gogrepo_delta" gogrepo_delta.py
+          # --strip removes debug symbols (Linux only; libpython is ~33 MB unstripped).
+          # The excluded modules are never imported by gogrepo_delta.py; they were only
+          # being bundled transitively (setuptools, pydoc, multiprocessing, REPL support).
+          pyinstaller --onefile --name "gogrepo_delta" \
+            ${{ runner.os == 'Linux' && '--strip' || '' }} \
+            --exclude-module setuptools --exclude-module pkg_resources \
+            --exclude-module _distutils_hack --exclude-module packaging \
+            --exclude-module pydoc --exclude-module pydoc_data \
+            --exclude-module multiprocessing --exclude-module concurrent \
+            --exclude-module readline --exclude-module rlcompleter \
+            --exclude-module code --exclude-module _pyrepl \
+            gogrepo_delta.py
 
       - name: Smoke-test the binary
         shell: bash
