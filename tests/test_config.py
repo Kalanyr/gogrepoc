@@ -737,7 +737,7 @@ class CompactLayoutTests(ConfigTestCase):
     def test_options_that_belong_together_are_listed_together_in_every_section(self):
         for section, blocks in self.layout:
             keys = [k for c, ks in blocks for k in ks]
-            for group in (('os', 'skipos'), ('lang', 'skiplang'), ('ids', 'skipids'),
+            for group in (('os', 'skipos'), ('lang', 'skiplang'), ('ids', 'skipids'), ('tags', 'skiptags'),
                           ('skipgalaxy', 'skipstandalone', 'skipshared', 'skipextras', 'skipgames'), ('skipmd5', 'skipsize', 'skipzip')):
                 present = [k for k in group if k in keys]
                 if len(present) > 1:

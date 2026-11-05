@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.37-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.39-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -38,7 +38,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.37` |
+| **Current version** | `v0.5.39` |
 | **Python requirement** | Python 3.10 or newer |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -69,6 +69,7 @@ library and helps you maintain a dependable, verifiable local collection.
   - [clear_partial_downloads](#clear_partial_downloads)
   - [trash](#trash)
   - [diagnostics](#diagnostics)
+- [Selecting games by tag](#selecting-games-by-tag)
 - [Operating system and language selection](#operating-system-and-language-selection)
 - [Configuration](#configuration)
 - [Files and data safety](#files-and-data-safety)
@@ -129,6 +130,12 @@ The script must be started with a Python interpreter; do not execute it as a she
 
   ```bash
   python -m pip install html2text
+  ```
+
+- `blake3`: enables BLAKE3 checksums for `verify` (see [BLAKE3 checksums](#blake3-checksums)). Without it everything works as before, using MD5 only.
+
+  ```bash
+  python -m pip install blake3
   ```
 
 - **Linux/Unix:** PyQt5 with QtDBus support can be used for desktop-session sleep inhibition where supported.
@@ -242,6 +249,7 @@ Useful options:
 - `--updateonly`: only update games GOG marks as updated.
 - `--full`: update all games in the account.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude selected games.
+- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by the tags of your GOG library (see [Selecting games by tag](#selecting-games-by-tag)).
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skiphidden`: skip games marked as hidden.
@@ -267,6 +275,7 @@ python gogrepo_delta.py download --ids game_id
 Useful options:
 - `--dryrun`: show what would be downloaded without downloading.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude games.
+- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by tag.
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skipextras`: skip bonus content.
@@ -290,10 +299,12 @@ python gogrepo_delta.py verify "/path/to/GOG games" --forceverify
 Useful options:
 - `--forceverify`: also verify files unchanged since their last successful verification.
 - `--skipmd5`, `--skipsize`, `--skipzip`: skip the corresponding check.
+- `--noblake3`: do not record or compare BLAKE3 checksums (see below).
 - `--delete`: permanently delete files that fail integrity checks.
 - `--noclean`: leave files that fail integrity checks in place.
 - `--clean`: deprecated; cleaning is already the default.
 - `--ids ID ...` / `--skipids ID ...`: include or exclude games.
+- `--tags TAG ...` / `--skiptags TAG ...`: include or exclude games by tag.
 - `--os OS ...` / `--skipos OS ...`: select or exclude operating systems.
 - `--lang LANG ...` / `--skiplang LANG ...`: select or exclude languages.
 - `--skipfiles FILE ...`: skip filenames or glob patterns.
@@ -303,6 +314,16 @@ Useful options:
 
 **Exit status:** `verify` returns `1` if it finds any problem, including missing files.
 
+#### BLAKE3 checksums
+
+GOG publishes only MD5 checksums, so BLAKE3 cannot be compared with anything from GOG. Instead it is a **local fingerprint** kept in the manifest (field `blake3`), which needs the optional `blake3` package:
+
+- The first time a file passes `verify`, its BLAKE3 is recorded ("trust on first verify"). Both hashes are computed in the same read pass.
+- A later full check (`verify --forceverify`) compares only the recorded BLAKE3, which detects any change since the file last passed (for example bit rot) and is faster on fast disks. If the BLAKE3 differs and the MD5 is known, the MD5 decides: a mismatch is reported, a match means the stored BLAKE3 was stale and is refreshed.
+- Files verified with an older version have no recorded BLAKE3 yet: run `verify --forceverify` once to record them.
+- A BLAKE3 is recorded only for content that was actually confirmed (MD5 match, or for file types without MD5 a known size that matched). `--skipmd5` records nothing for files that have an MD5.
+- Use `--noblake3` (or `noblake3 = true` under `[verify]` in the config file) to switch the feature off. Without the package, `verify` says so once and behaves as before.
+
 ### `import`
 
 ```bash
@@ -311,7 +332,7 @@ python gogrepo_delta.py import "/old/GOG collection" "/new/GOG collection"
 
 Files are imported only when their MD5 checksums match manifest entries.
 
-Options include `--ids ID ...`, `--skipids ID ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
+Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
 
 ### `backup`
 
@@ -321,7 +342,7 @@ python gogrepo_delta.py backup "/path/to/source" "/path/to/backup"
 
 Creates an incremental backup by copying known files from the source collection to the destination.
 
-Options include `--ids ID ...`, `--skipids ID ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
+Options include `--ids ID ...`, `--skipids ID ...`, `--tags TAG ...`, `--skiptags TAG ...`, `--os OS ...`, `--skipos OS ...`, `--lang LANG ...`, `--skiplang LANG ...`, `--skipextras`, `--skipgames`, `--skipgalaxy`, `--skipstandalone`, and `--skipshared`.
 
 ### `list`
 
@@ -396,6 +417,22 @@ python gogrepo_delta.py diagnostics --verbose
 ```
 
 Generates diagnostic information intended for maintenance and troubleshooting. `--verbose` includes additional information.
+
+## Selecting games by tag
+
+`--tags` and `--skiptags` use the tags you made in your GOG library (for example "Favorites" or "NEXT TO PLAY"). They work with `update`, `download`, `verify`, `import` and `backup`:
+
+```bash
+python gogrepo_delta.py update
+python gogrepo_delta.py download --tags Favorites
+python gogrepo_delta.py verify --tags "NEXT TO PLAY" Completed --skiptags Abandoned
+```
+
+- `update` reads your tags from GOG and stores their names in the manifest (`tag_names`). It refreshes them for every game on each run, so run `update` after you change tags on GOG. The other commands read the tags from the manifest and stop with a message if it has no tag data yet.
+- A game matches if it has **any** of the tags given. Case, accents and punctuation do not matter. A tag with spaces must be in quotes.
+- `--tags` together with `--ids` means the games that are in both. `--skiptags` always wins.
+- A tag that no game has is an error (the message lists the tags that exist). If nothing is left to do, the command stops instead of running on all games.
+- `update --tags` limits what is fetched but keeps the usual rule of what counts (new and updated games; add `--full` for all of them). Like `--ids`, a tag-limited update never removes games from the manifest.
 
 ## Operating system and language selection
 
@@ -497,7 +534,7 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.37 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.39 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
 
 At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 

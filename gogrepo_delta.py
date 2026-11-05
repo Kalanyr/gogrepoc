@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.37'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.39'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -102,6 +102,12 @@ try:
     from html2text import html2text
 except ImportError:
     def html2text(x): return x
+
+# BLAKE3 (entry 38): optional. Without the package the program works exactly as before, MD5 only.
+try:
+    import blake3 as _blake3
+except ImportError:
+    _blake3 = None
 
     
 GENERIC_READ = 0x80000000
@@ -1495,6 +1501,60 @@ def hashfile(afile, blocksize=65536):
     return hasher.hexdigest()
 
 
+HASH_BLOCKSIZE = 1024 * 1024
+
+
+def blake3_available():
+    """True when the optional blake3 package is installed (entry 38)."""
+    return _blake3 is not None
+
+
+def _new_blake3_hasher():
+    """A BLAKE3 hasher that may use several threads for large updates (when this version of the package can)."""
+    try:
+        return _blake3.blake3(max_threads=_blake3.blake3.AUTO)
+    except (AttributeError, TypeError):
+        return _blake3.blake3()
+
+
+def hash_file(path, md5=True, blake3=False, blocksize=HASH_BLOCKSIZE):
+    """Hashes a file with MD5 and/or BLAKE3 in ONE read pass. Returns {'md5': hex or None, 'blake3': hex or None}.
+    When only BLAKE3 is wanted, the file is memory-mapped (fast, multi-threaded) if the package supports it; any problem
+    with that falls back to normal reads. Entry 38."""
+    result = {'md5': None, 'blake3': None}
+    if blake3 and _blake3 is None:
+        raise RuntimeError('the blake3 package is not installed')
+    if blake3 and not md5:
+        hasher = _new_blake3_hasher()
+        update_mmap = getattr(hasher, 'update_mmap', None)
+        if update_mmap is not None:
+            try:
+                update_mmap(path)
+                result['blake3'] = hasher.hexdigest()
+                return result
+            except Exception:
+                pass    # empty or unmappable file, or an older package: read it normally below
+    md5_hasher = hashlib.md5() if md5 else None
+    blake3_hasher = _new_blake3_hasher() if blake3 else None
+    buf = bytearray(blocksize)
+    view = memoryview(buf)
+    with open(path, 'rb', buffering=0) as f:
+        while True:
+            n = f.readinto(buf)
+            if not n:
+                break
+            chunk = view[:n]
+            if md5_hasher is not None:
+                md5_hasher.update(chunk)
+            if blake3_hasher is not None:
+                blake3_hasher.update(chunk)
+    if md5_hasher is not None:
+        result['md5'] = md5_hasher.hexdigest()
+    if blake3_hasher is not None:
+        result['blake3'] = blake3_hasher.hexdigest()
+    return result
+
+
 def test_zipfile(filename):
     """Opens filename and tests the file for ZIP integrity.  Returns True if
     zipfile passes the integrity test, False otherwise.
@@ -1675,6 +1735,7 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
                 if oldDownload.size == newDownload.size and oldDownload.name == newDownload.name and oldDownload.lang == newDownload.lang and candidate == None:
                     candidate = AttrDict(**oldDownload.copy())
                     if strict:
+                        candidate.blake3 = None    # entry 38: no md5 to confirm it is the same file, so the recorded BLAKE3 goes too
                         try:
                            candidate.prev_verified = False        
                         except AttributeError:
@@ -1688,6 +1749,7 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
                 newDownload.prev_verified = candidate.prev_verified         
             except AttributeError:
                 newDownload.prev_verified = False
+            newDownload.blake3 = getattr(candidate, 'blake3', None)    # entry 38: same content (md5/size/lang match), same BLAKE3
             try:
                 newDownload.old_updated = candidate.old_updated #Propogate until actually updated.
             except AttributeError:
@@ -1745,6 +1807,7 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
                 if oldExtra.name == newExtra.name and oldExtra.size == newExtra.size and candidate == None:
                     candidate = AttrDict(**oldExtra.copy())
                     if strict:
+                        candidate.blake3 = None    # entry 38
                         try:
                             #candidate.force_change = True
                             candidate.prev_verified = False
@@ -1759,6 +1822,7 @@ def handle_game_updates(olditem, newitem,strict, update_downloads_strict, update
                 newExtra.prev_verified = candidate.prev_verified         
             except AttributeError:
                 newExtra.prev_verified = False
+            newExtra.blake3 = getattr(candidate, 'blake3', None)    # entry 38
             try:
                 newExtra.force_change = candidate.force_change
             except AttributeError:
@@ -2087,6 +2151,7 @@ def filter_downloads(out_list, downloads_list, lang_list, os_list,save_md5_xml,u
                                              version=download['version'],
                                              href= href,
                                              md5=None,
+                                             blake3=None,
                                              name=None,
                                              size=None,
                                              prev_verified=False,
@@ -2183,6 +2248,7 @@ def filter_extras(out_list, extras_list,save_md5_xml,updateSession,product_api_c
                              version=None,
                              href= href,
                              md5=None,
+                             blake3=None,
                              name=None,
                              size=None,
                              prev_verified=False,
@@ -2651,6 +2717,130 @@ def resolve_ids_and_report(items, ids, option='-ids'):
     return result.selected
 
 
+# ---------------------------------------------------------------------------------------------
+# Library tags (-tags and -skiptags; entry 39)
+# ---------------------------------------------------------------------------------------------
+# The tags are the ones you made in your GOG library. GOG sends them with the product list: every product has a list of tag ids,
+# and the whole answer has the list of {id, name}. update stores the NAMES in the field tag_names of each game in the manifest
+# (also for games it does not fetch again), and the other commands read them from there.
+def tag_key(name):
+    """A tag name in the form that is compared: case, accents, punctuation and spacing do not matter."""
+    return normalize_name(name)
+
+
+def tag_map_of(json_data):
+    """{tag id (text): tag name} from a page of the product list."""
+    tag_map = {}
+    for tag in (json_data.get('tags') or []):
+        if isinstance(tag, dict) and tag.get('id') is not None and tag.get('name'):
+            tag_map[str(tag['id'])] = str(tag['name'])
+    return tag_map
+
+
+def product_tag_names(product, tag_map):
+    """The names of the tags of one product of the product list. A tag id with no known name is kept as the id, so that it
+    can still be used."""
+    names = []
+    for tag in (product.get('tags') or []):
+        if isinstance(tag, dict):
+            name = tag.get('name') or tag_map.get(str(tag.get('id')))
+        else:
+            name = tag_map.get(str(tag))
+            if name is None:
+                name = str(tag)
+        if name and str(name) not in names:
+            names.append(str(name))
+    return names
+
+
+def game_tag_names(game):
+    return list(getattr(game, 'tag_names', None) or [])
+
+
+def game_has_any_tag(game, keys):
+    return bool(set(tag_key(name) for name in game_tag_names(game)) & keys)
+
+
+def tag_keys(tags):
+    return set(key for key in (tag_key(tag) for tag in tags) if key)
+
+
+class TagSelection(object):
+    def __init__(self):
+        self.selected = None     # ids of the games that have one of the -tags (None: -tags was not used)
+        self.skipped = set()     # ids of the games that have one of the -skiptags
+        self.problems = []       # (what, why, message)
+        self.fatal = False       # nothing can be decided (the manifest has no tag data)
+
+
+def select_games_by_tags(items, tags, skiptags):
+    """Which games do -tags and -skiptags mean? A game matches if it has ANY of the tags. A tag that no game has is a problem, with
+    the tags that exist, and a hint when the words of one tag were typed without quotes."""
+    result = TagSelection()
+    known = {}
+    for game in items:
+        for name in game_tag_names(game):
+            known.setdefault(tag_key(name), name)
+    if not any('tag_names' in game for game in items):
+        result.fatal = True
+        result.problems.append(('-tags' if tags else '-skiptags', 'no tag data',
+                                "The manifest holds no tag data yet. Run 'update' once: it reads your tags from GOG and keeps them in the manifest."))
+        return result
+
+    def check(option, wanted):
+        unmatched = [tag for tag in wanted if tag_key(tag) and tag_key(tag) not in known]
+        shown = ('Tags in the manifest: %s.' % ', '.join(sorted(known.values(), key=str.casefold))) if known else 'No game in the manifest has a tag.'
+        joined = ' '.join(unmatched)
+        for tag in unmatched:
+            hint = ''
+            if len(unmatched) > 1 and tag_key(joined) in known:
+                hint = ' The words %s look like one tag that was split into words: %s. A tag with spaces must be in quotes: %s "%s".' % (
+                    ' '.join("'%s'" % word for word in unmatched), known[tag_key(joined)], option, joined)
+            result.problems.append(('%s %s' % (option, tag), 'no such tag',
+                                    "%s '%s' matches no game in the manifest.%s %s" % (option, tag, hint, shown)))
+    check('-tags', tags)
+    check('-skiptags', skiptags)
+    if tags:
+        keys = tag_keys(tags)
+        result.selected = set(game.id for game in items if game_has_any_tag(game, keys))
+    if skiptags:
+        keys = tag_keys(skiptags)
+        result.skipped = set(game.id for game in items if game_has_any_tag(game, keys))
+    return result
+
+
+def apply_tag_options(args):
+    """For download, verify, import and backup: turns -tags and -skiptags into the ids that -ids / -skipids already handle, so those
+    commands need no change. -tags together with -ids means the games that are in both. Returns False when nothing is left to do
+    (or nothing can be decided); an empty selection must never fall through as 'all games'."""
+    tags, skiptags = list(args.tags or []), list(args.skiptags or [])
+    if not tags and not skiptags:
+        return True
+    items = load_manifest()
+    selection = select_games_by_tags(items, tags, skiptags)
+    for what, why, message in selection.problems:
+        error(message)
+        run_report.fail(what, why)
+    if selection.fatal:
+        return False
+    if tags:
+        chosen = set(selection.selected)
+        if args.ids:
+            resolved = resolve_game_ids(items, args.ids, '-ids')
+            report_id_resolution(resolved)
+            chosen &= resolved.selected
+        chosen -= selection.skipped
+        if not chosen:
+            warn('no game matches the tag(s) {%s}%s' % (', '.join(tags), ' and -ids' if args.ids else ''))
+            return False
+        info('-tags {%s}%s: %d game(s)' % (', '.join(tags), ' with -ids' if args.ids else '', len(chosen)))
+        args.ids = [str(game_id) for game_id in sorted(chosen, key=str)]
+    if skiptags:
+        info('-skiptags {%s}: skipping %d game(s)' % (', '.join(skiptags), len(selection.skipped)))
+        args.skipids = list(args.skipids or []) + [str(game_id) for game_id in sorted(selection.skipped, key=str)]
+    return True
+
+
 # --- the list command ---
 def _display_width(text):
     return sum(0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in text)
@@ -2783,6 +2973,8 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g5.add_argument('-ids', action='store', help='id(s)/titles(s) of (a) specific game(s) to update', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s)/titles(s) of (a) specific game(s) not to update', nargs='*', default=[])
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g1.add_argument('-wait', action='store', type=float,
                     help='wait this long in hours before starting', default=0.0)  # sleep in hr
     g1.add_argument('-diagnostic', action='store_true', help = "More exhaustively probes GOG for data in preparation for the diagnostics command. This causes slower updates and will generate more warning messages. ")
@@ -2801,6 +2993,8 @@ def build_parser():
     g3 = g1.add_mutually_exclusive_group()  # below are mutually exclusive    
     g3.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to download', nargs='*', default=[])
     g3.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT download', nargs='*', default=[])
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g3.add_argument('-id', action='store', help='(deprecated) id or title of the game in the manifest to download')
     g1.add_argument('-covers', action='store_true', help='downloads cover images for each game')
     g1.add_argument('-backgrounds', action='store_true', help='downloads background images for each game')
@@ -2841,6 +3035,8 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive    
     g5.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to import', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT import', nargs='*', default=[])
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     
 
     g1 = sp1.add_parser('backup', help='Perform an incremental backup to specified directory')
@@ -2849,6 +3045,8 @@ def build_parser():
     g5 = g1.add_mutually_exclusive_group()  # below are mutually exclusive    
     g5.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to backup', nargs='*', default=[])
     g5.add_argument('-skipids', action='store', help='id(s) or title(s) of the game(s) in the manifest to NOT backup', nargs='*', default=[])    
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g2 = g1.add_mutually_exclusive_group()  # below are mutually exclusive        
     g2.add_argument('-skipos', action='store', help='skip backup of game files for operating system(s)', nargs='*', default=[])  
     g2.add_argument('-os', action='store', help="backup game files only for operating system(s) (default: the operating system of this computer)", nargs='*', default=[])  
@@ -2871,6 +3069,7 @@ def build_parser():
     g1.add_argument('-skipmd5', action='store_true', help='do not perform MD5 check')
     g1.add_argument('-skipsize', action='store_true', help='do not perform size check')
     g1.add_argument('-skipzip', action='store_true', help='do not perform zip integrity check')
+    g1.add_argument('-noblake3', action='store_true', help='do not record or compare BLAKE3 checksums (they need the optional blake3 package)')
     g7 = g1.add_mutually_exclusive_group()
     g7.add_argument('-highmemory', action='store_true', help='use in memory file to test multi-part zip files (instead of temporary file). At least 50 GB of unused memory is recommended to use this.')
     g7.add_argument('-lowtmpspace', action='store_true', help='do not test multi-part zip archives (due to not having enough space for a temporary file). Recommended if tmp file location has less than 50 GB of free space. ')
@@ -2881,6 +3080,8 @@ def build_parser():
     g3 = g1.add_mutually_exclusive_group()  # below are mutually exclusive
     g3.add_argument('-ids', action='store', help='id(s) or title(s) of the game in the manifest to verify', nargs='*', default=[])
     g3.add_argument('-skipids', action='store', help='id(s) or title(s) of the game[s] in the manifest to NOT verify', nargs='*', default=[])
+    g1.add_argument('-tags', action='store', help='only the games with one of these tags of your GOG library (any of them); with -ids: the games in both', nargs='*', default=[])
+    g1.add_argument('-skiptags', action='store', help='skip the games with one of these tags of your GOG library', nargs='*', default=[])
     g3.add_argument('-id', action='store', help='(deprecated) id or title of the game in the manifest to verify')    
     g1.add_argument('-skipfiles', action='store', help='file name (or glob patterns) to NOT verify', nargs='*', default=[])
     g4 = g1.add_mutually_exclusive_group()  # below are mutually exclusive        
@@ -3111,6 +3312,8 @@ CONFIG_NOTES = [
             ('full', 'all games of your account (default if ids are given)'))),
     (None, (('ids', 'games to include, by id or title'),
             ('skipids', 'games to skip, by id or title'))),
+    (None, (('tags', 'only games with one of these tags of your GOG library (update stores the tags in the manifest)'),
+            ('skiptags', 'skip games with one of these tags'))),
     (None, (('wait', 'wait this many hours before starting'),)),
     (None, (('diagnostic', 'probe GOG more thoroughly for the diagnostics command (slower, more warnings)'),)),
     (None, (('savedir', 'folder the games are saved in (export: also checks which files exist there and adds an "on disk" column)'),)),
@@ -3136,7 +3339,8 @@ CONFIG_NOTES = [
             ('forceverify', 'also verify files unchanged since their last successful verification'))),
     (None, (('skipmd5', 'do not check the MD5'),
             ('skipsize', 'do not check the size'),
-            ('skipzip', 'do not check zip integrity'))),
+            ('skipzip', 'do not check zip integrity'),
+            ('noblake3', 'do not record or compare BLAKE3 checksums (optional blake3 package)'))),
     (None, (('highmemory', 'test multi-part zips in memory instead of a temporary file (at least 50 GB of unused memory advised)'),
             ('lowtmpspace', 'do not test multi-part zips (advised when the temp location has less than 50 GB free)'))),
     (None, (('delete', 'delete files that fail the integrity test'),
@@ -3797,8 +4001,12 @@ def warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, 
          '(-os, -lang), or put them into the config file.')
 
 
-def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None):
+def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,skipHidden,installers,resumemode,strict,strictDupe,strictDownloadsUpdate,strictExtrasUpdate,md5xmls,noChangeLogs,diagnostic,lang_fallback=None,tags=None,skiptags=None):
     media_type = GOG_MEDIA_TYPE_GAME
+    tags, skiptags = list(tags or []), list(skiptags or [])    # entry 39: -tags / -skiptags (names of the tags of your GOG library)
+    tag_wanted, tag_unwanted = tag_keys(tags), tag_keys(skiptags)
+    tag_filter = bool(tags or skiptags)
+    known_tag_keys, tags_refreshed, pages_complete, tag_skipped_count = set(), 0, False, 0
     items = []
     known_ids = []
     known_titles = []
@@ -3922,7 +4130,15 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         for item in gamesdb:
             known_titles.append(item.title)
 
-        warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, ids, skipids, partial)
+        narrow_ids, narrow_skipids = ids, skipids
+        if tag_filter:      # the manifest's own tag data tells which games this update is likely to fetch
+            guess = select_games_by_tags(gamesdb, tags, skiptags)
+            if not guess.fatal:
+                if guess.selected is not None and not ids:
+                    narrow_ids = [str(game_id) for game_id in guess.selected] or ids
+                narrow_skipids = list(skipids) + [str(game_id) for game_id in guess.skipped]
+        warn_if_update_narrows_manifest(gamesdb, os_list, lang_list, lang_fallback, narrow_ids, narrow_skipids, partial)
+        known_by_id = dict((game.id, game) for game in gamesdb)
             
         # Fetch shelf data
         done = False
@@ -3941,6 +4157,8 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 error('failed to load product data (are you still logged in?)')
                 raise SystemExit(1)
 
+            tag_map = tag_map_of(json_data)
+            known_tag_keys.update(tag_key(name) for name in tag_map.values())
             # Parse out the interesting fields and add to items dict
             for item_json_data in json_data['products']:
                 # skip games marked as hidden
@@ -3966,6 +4184,13 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 item._long_title_mirror = item.long_title
                 item._id_mirror =  item.id
 
+
+                # entry 39: the tag names of this game; the manifest entry of a game that is not fetched again gets them too
+                item.tag_names = product_tag_names(item_json_data, tag_map)
+                known_game = known_by_id.get(item.id)
+                if known_game is not None and getattr(known_game, 'tag_names', None) != item.tag_names:
+                    known_game.tag_names = list(item.tag_names)
+                    tags_refreshed += 1
 
                 item.gog_data = AttrDict()
                 for key in item_json_data:
@@ -3996,6 +4221,12 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                                 continue
                                 
                                 
+                        if tag_wanted and not game_has_any_tag(item, tag_wanted):
+                            continue                # not one of the tagged games
+                        if tag_unwanted and game_has_any_tag(item, tag_unwanted):
+                            info('skipping "{}" (has a tag from -skiptags)'.format(item.title))
+                            tag_skipped_count += 1
+                            continue
                         if (not partial) or (updateonly and item.has_updates) or (skipknown and item.id not in known_ids):  
                              items.append(item)
                     else:        
@@ -4004,10 +4235,20 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 
             if i >= json_data['totalPages']:
                 done = True
+                pages_complete = True
                     
      
+        if tags_refreshed:
+            info('the tags of %d game(s) in the manifest were refreshed' % tags_refreshed)
+            save_manifest(gamesdb)
+        if pages_complete:
+            for option, wanted in (('-tags', tags), ('-skiptags', skiptags)):
+                for tag in wanted:
+                    if tag_key(tag) and tag_key(tag) not in known_tag_keys:
+                        error("%s '%s' is not a tag of your GOG library." % (option, tag))
+                        run_report.fail('%s %s' % (option, tag), 'no such tag')
 
-        if not idsOriginal and not updateonly and not skipknown:
+        if not idsOriginal and not tag_filter and not updateonly and not skipknown:     # a run limited by -ids or tags never removes games
             validIDs = [item.id for item in items]
             invalidItems = [itemID for itemID in known_ids if itemID not in validIDs and str(itemID) not in skipids]
             if len(invalidItems) != 0: 
@@ -4057,7 +4298,9 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             
         items_count = len(items)
         print_padding = len(str(items_count))
-        if not idsOriginal and not updateonly and not skipknown:
+        if tag_filter:
+            info('limited by tags: %d game(s) selected%s' % (items_count, ', %d skipped by -skiptags' % tag_skipped_count if skiptags else ''))
+        if not idsOriginal and not tag_filter and not updateonly and not skipknown:
             info('found %d games !!%s' % (items_count, '!'*int(items_count/100)))  # teehee
             if skipids: 
                 formattedSkipIds =  ', '.join(map(str, skipids))        
@@ -4225,7 +4468,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
         info('resume completed')
         if (resumemode != 'onlyresume'):
             info('returning to specified download request...')
-            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs,save_diagnostic,lang_fallback=save_lang_fallback)
+            cmd_update(save_os_list, save_lang_list, save_skipknown, save_updateonly, save_partial, ids, skipids,skipHidden,save_installers,resumemode,save_strict,save_strictDupe,save_strictDownloadsUpdate,save_strictExtrasUpdate,save_md5xmls,save_noChangeLogs,save_diagnostic,lang_fallback=save_lang_fallback,tags=tags,skiptags=skiptags)
 
 def cmd_output_diagnostic_data(verbose):
     gamesdb = load_manifest()
@@ -5661,9 +5904,13 @@ def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipga
                     shutil.copy(os.path.join(src_game_dir, extra_file), dest_game_dir)
 
 
-def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy,skipstandalone,skipshared, skipfiles, force_verify, permissive_change_clear,high_memory,free_tmp_space,lang_fallback=None):
-    """Verifies all game files match manifest with any available md5 & file size info
-    """
+def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_zips, delete_on_fail, clean_on_fail, ids, os_list, lang_list, skipgalaxy,skipstandalone,skipshared, skipfiles, force_verify, permissive_change_clear,high_memory,free_tmp_space,lang_fallback=None,use_blake3=True):
+    """Verifies all game files match manifest with any available md5 & file size info.
+
+    Entry 38 - BLAKE3 (optional, needs the blake3 package; use_blake3=False switches it off): a file that passes its checks gets
+    its BLAKE3 recorded in the manifest ("trust on first verify"). A later full verification (-forceverify) compares only that
+    BLAKE3 - fast, and it detects changes since the file last passed. If the BLAKE3 differs and the MD5 is known, the MD5 decides
+    (a matching MD5 means the recorded BLAKE3 was stale and is refreshed)."""
     item_count = 0
     missing_cnt = 0
     bad_md5_cnt = 0
@@ -5673,6 +5920,15 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
     clean_file_cnt = 0
     prev_verified_cnt = 0
     skip_cnt = 0
+    bad_b3_cnt = 0
+    b3_match_cnt = 0
+    b3_recorded_cnt = 0
+    b3_on = False
+    if use_blake3:
+        if blake3_available():
+            b3_on = True
+        else:
+            info('the blake3 package is not installed, so no BLAKE3 checksums are recorded or compared (python -m pip install blake3; -noblake3 hides this message)')
 
     items = load_manifest()
     
@@ -5823,12 +6079,49 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                         run_report.fail(itm_dirpath, 'wrong file size')
                         bad_size_cnt += 1
                         fail = True
-                if not fail and check_md5 and itm.md5 is not None: #MD5 is not reliable if size doesn't match
-                    if itm.md5 != hashfile(itm_file):
-                        warn('mismatched md5 for %s' % itm_dirpath)
-                        run_report.fail(itm_dirpath, 'wrong checksum (md5)')
-                        bad_md5_cnt += 1
+                # Entry 38: BLAKE3 is not used for a file without md5 that is flagged as changed (the recorded one may be of the old content)
+                item_b3 = b3_on and not (itm.md5 is None and getattr(itm, 'force_change', False))
+                stored_b3 = (getattr(itm, 'blake3', None) or None) if item_b3 else None
+                want_md5 = check_md5 and itm.md5 is not None
+                md5_proven = False      # the content is known to equal what the manifest's md5 describes
+                record_b3 = None        # a BLAKE3 to store in the manifest if the file passes everything
+                if not fail and stored_b3:
+                    current_b3 = hash_file(itm_file, md5=False, blake3=True)['blake3']
+                    if current_b3 == stored_b3:
+                        b3_match_cnt += 1
+                        md5_proven = itm.md5 is not None    # a recorded BLAKE3 only exists for content that passed the md5 check
+                    elif want_md5:
+                        if itm.md5 == hashfile(itm_file):
+                            warn('the recorded blake3 of %s was stale (the md5 matches); it is refreshed' % itm_dirpath)
+                            record_b3 = current_b3
+                            md5_proven = True
+                        else:
+                            warn('mismatched md5 for %s' % itm_dirpath)
+                            run_report.fail(itm_dirpath, 'wrong checksum (md5)')
+                            bad_md5_cnt += 1
+                            fail = True
+                    else:
+                        warn('blake3 of %s differs from the one recorded when it last passed verification' % itm_dirpath)
+                        run_report.fail(itm_dirpath, 'changed since last verification (blake3)')
+                        bad_b3_cnt += 1
                         fail = True
+                elif not fail:
+                    # Both hashes in one read pass. A BLAKE3 baseline is only recorded for a file whose content was actually
+                    # confirmed: by its md5, or - for types without md5 - by a known size (the zip test follows below).
+                    hash_md5 = want_md5
+                    hash_b3 = item_b3 and (want_md5 or (itm.md5 is None and check_filesize and itm.size is not None))
+                    if hash_md5 or hash_b3:
+                        hashes = hash_file(itm_file, md5=hash_md5, blake3=hash_b3)  #MD5 is not reliable if size doesn't match
+                        if hash_md5:
+                            if itm.md5 != hashes['md5']:
+                                warn('mismatched md5 for %s' % itm_dirpath)
+                                run_report.fail(itm_dirpath, 'wrong checksum (md5)')
+                                bad_md5_cnt += 1
+                                fail = True
+                            else:
+                                md5_proven = True
+                        if hash_b3 and not fail:
+                            record_b3 = hashes['blake3']
                 if not fail and check_zips:
                      #Doesn't matter if it's a valid zip if size / MD5 are wrong, it's not the right zip
                     if (itm.name.lower().endswith('.zip.001')):
@@ -5911,9 +6204,13 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                     old_last_updated = None
                 if not fail:
                     itm.prev_verified= True;
-                    if check_md5 and itm.md5 is not None:
-                        itm.force_change = False #Verified as correct by MD5 match
+                    if md5_proven:
+                        itm.force_change = False #Verified as correct by MD5 match (or by the BLAKE3 recorded for an MD5-verified file)
                         itm.old_updated = itm.updated
+                    if record_b3 and getattr(itm, 'blake3', None) != record_b3:
+                        itm.blake3 = record_b3
+                        b3_recorded_cnt += 1
+                        game_changed = True
                     if permissive_change_clear:
                         itm.force_change = False #Flag has been set to accept matching name / size and passing the zip test as the correct file 
                         itm.old_updated = itm.updated
@@ -5948,6 +6245,10 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
     info('missing items....... %d' % (missing_cnt + del_file_cnt + clean_file_cnt))
     if check_md5:
         info('md5 mismatches...... %d' % bad_md5_cnt)
+    if b3_on:
+        info('blake3 matches...... %d' % b3_match_cnt)
+        info('blake3 recorded..... %d' % b3_recorded_cnt)
+        info('blake3 mismatches... %d' % bad_b3_cnt)
     if check_filesize:
         info('size mismatches..... %d' % bad_size_cnt)
     if check_zips:
@@ -6230,6 +6531,16 @@ def main(args):
     if args.command == 'list':
         consoleHandler.setStream(sys.stderr)    # the list itself goes to stdout, so it can be piped or redirected; messages to stderr
 
+    if args.command in ('download', 'verify', 'import', 'backup') and (args.tags or args.skiptags):
+        if getattr(args, 'id', None):
+            args.ids = [args.id]
+        if not apply_tag_options(args):      # nothing to do, or no tag data: stop here, never fall through to 'all games'
+            etime = datetime.datetime.now()
+            run_report.log()
+            info('--')
+            info('total time: %s' % (etime - stime))
+            return run_report.exit_status()
+
     if args.command == 'login':
         login_ok = cmd_login(args.username, args.password, browser=args.browser)
         return 0 if login_ok else 1  # no need to see time stats
@@ -6243,7 +6554,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)                
         if not args.installers:
             args.installers = "standalone"
-        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback)
+        cmd_update(args.os, args.lang, args.skipknown, args.updateonly, not args.full, args.ids, args.skipids,args.skiphidden,args.installers,args.resumemode,args.strictverify,args.strictdupe,args.lenientdownloadsupdate,args.strictextrasupdate,args.md5xmls,args.nochangelogs,args.diagnostic,lang_fallback=args.lang_fallback,tags=args.tags,skiptags=args.skiptags)
     elif args.command == 'download':
         if (args.id):
             args.ids = [args.id]
@@ -6282,7 +6593,7 @@ def main(args):
         check_filesize = not args.skipsize
         check_zips = not args.skipzip
         free_tmp_space = not args.lowtmpspace
-        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete,not args.noclean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles, args.forceverify,args.permissivechangeclear,args.highmemory,free_tmp_space,lang_fallback=args.lang_fallback)
+        cmd_verify(args.gamedir, args.skipextras,args.skipids,check_md5, check_filesize, check_zips, args.delete,not args.noclean,args.ids,  args.os, args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles, args.forceverify,args.permissivechangeclear,args.highmemory,free_tmp_space,lang_fallback=args.lang_fallback,use_blake3=not args.noblake3)
     elif args.command == 'backup':
         apply_os_lang_defaults(args)
         if args.skipgames:

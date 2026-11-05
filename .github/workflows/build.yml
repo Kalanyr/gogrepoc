@@ -1,0 +1,140 @@
+name: Build and upload release binaries
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs_on: windows-latest
+            platform: win-x64
+            ext: .exe
+            archive_ext: zip
+
+          - runs_on: windows-11-arm
+            platform: win-arm64
+            ext: .exe
+            archive_ext: zip
+
+          # Linux binaries are built on the oldest runner image offered, because a PyInstaller
+          # binary needs at least the glibc version of the machine it was built on.
+          - runs_on: ubuntu-22.04
+            platform: linux-x64
+            ext: ""
+            archive_ext: tar.gz
+
+          - runs_on: ubuntu-22.04-arm
+            platform: linux-arm64
+            ext: ""
+            archive_ext: tar.gz
+
+          - runs_on: macos-15-intel
+            platform: mac-x64
+            ext: ""
+            archive_ext: tar.gz
+
+          - runs_on: macos-latest
+            platform: mac-arm64
+            ext: ""
+            archive_ext: tar.gz
+
+    runs-on: ${{ matrix.runs_on }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install html5lib requests psutil cryptography html2text blake3 pyinstaller
+
+      - name: Run tests
+        shell: bash
+        run: |
+          python -m unittest discover -s tests
+
+      - name: Extract version
+        shell: bash
+        run: |
+          VERSION=$(python - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path("gogrepo_delta.py").read_text(encoding="utf-8")
+          patterns = [
+              r'__version__\s*=\s*[\'"]([^\'"]+)[\'"]',
+              r'VERSION\s*=\s*[\'"]([^\'"]+)[\'"]',
+              r'version\s*=\s*[\'"]([^\'"]+)[\'"]',
+          ]
+
+          for p in patterns:
+              m = re.search(p, text)
+              if m:
+                  print(m.group(1))
+                  raise SystemExit
+
+          raise SystemExit("No version string found in gogrepo_delta.py")
+          PY
+          )
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check that the release tag matches the script version
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_VERSION="${TAG_NAME#v}"
+          if [ "${TAG_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Release tag '${TAG_NAME}' does not match __version__ '${VERSION}' in gogrepo_delta.py. Fix the version or the tag, then publish the release again."
+            exit 1
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          pyinstaller --onefile --name "gogrepo_delta" gogrepo_delta.py
+
+      - name: Smoke-test the binary
+        shell: bash
+        run: |
+          "dist/gogrepo_delta${{ matrix.ext }}" --help
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p release
+
+          BIN_NAME="gogrepo_delta${{ matrix.ext }}"
+          ARCHIVE_NAME="gogrepo_delta-${VERSION}-${{ matrix.platform }}.${{ matrix.archive_ext }}"
+
+          cp "dist/${BIN_NAME}" "release/${BIN_NAME}"
+
+          cd release
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            7z a -tzip "${ARCHIVE_NAME}" "${BIN_NAME}" > /dev/null
+          else
+            tar -czf "${ARCHIVE_NAME}" "${BIN_NAME}"
+          fi
+
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          gh release upload "${TAG_NAME}" \
+            "release/gogrepo_delta-${VERSION}-${{ matrix.platform }}.${{ matrix.archive_ext }}" \
+            --clobber

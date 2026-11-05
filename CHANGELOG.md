@@ -33,6 +33,33 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.39 - 04.11.2026 - `-tags` and `-skiptags`: select games by the tags of your GOG library
+
+- The tags are the ones you made in your GOG library (for example "Favorites", "NEXT TO PLAY"). GOG sends them with the product list: every product has a list of tag ids, and the whole answer has the list of `{id, name}`. `update` now stores the **names** in the new field `tag_names` of every game in the manifest. Matching ignores case, accents, punctuation and spacing (`-tags "next to play"` finds `NEXT TO PLAY`); a game matches if it has **any** of the tags given.
+- New options `-tags TAG ...` and `-skiptags TAG ...` for `update`, `download`, `verify`, `import` and `backup` (also settings in the config file). They combine with each other and with `-ids` / `-skipids`: `-tags` with `-ids` means the games that are in both; `-skiptags` always wins. A tag with spaces must be in quotes; if the words of one tag were typed without quotes, the message says so.
+- `download`, `verify`, `import` and `backup` read the tags from the manifest: the options are turned into ids before the command runs (`apply_tag_options()`), so those commands needed no change. The selection can never fall through as "all games": if nothing is left, or the manifest has no tag data yet (run `update` once), the command stops with a message. A tag that no game has is an error and fails the run, with a list of the tags that exist.
+- `update -tags` / `-skiptags` limit what is fetched, like `-ids` does, but keep the normal rule for what counts (new and updated games; add `-full` for all of them). Like `-ids`, a tag-limited update never removes games from the manifest. A tag that does not exist in your library is reported at the end of the run and fails it; a tag that exists but has no games is not an error.
+- Every `update` that reads the product list also refreshes `tag_names` of the games that it does not fetch again (the list is read anyway; no extra requests), and saves the manifest if a tag changed. So a tag change on GOG reaches the manifest with the next `update`, even a plain one.
+- The tag data was checked against the documented format of the GOG product list (`tags` with `id`, `name` at the top and a list per product). The format of the per-product list was not visible in an example with data, so ids, `{id, name}` entries and unknown ids are all handled; an id without a known name is kept as the id.
+- `tests/test_tags.py`: 26 tests (name resolution, selection, ids/skipids handling, the dispatch in `main`, and `update` against a fake product list, including a control that a normal update does remove a game that left the account while a tag-limited one does not).
+
+DIFFERENCE: `update` writes the new field `tag_names` to the manifest and may save the manifest even when it has nothing else to change (when only a tag changed). Everything else is new options; without them nothing changes.
+
+## 0.5.38 - 04.11.2026 - Optional BLAKE3 checksums kept in the manifest
+
+- GOG publishes only MD5, so BLAKE3 cannot be checked against anything from GOG. It is a **local fingerprint**: the first time a file passes `verify`, its BLAKE3 is stored in the manifest entry (field `blake3`) - "trust on first verify". A later full verification (`verify -forceverify`) then compares only that BLAKE3 instead of computing the MD5 again, which detects any change since the file last passed (bit rot), and is faster on fast disks (BLAKE3 can use several threads and a memory-mapped file).
+- Optional: needs the `blake3` package (`python -m pip install blake3`). Without it the program behaves exactly as before and says so once per `verify` run. New option `-noblake3` (also a config setting under `[verify]`) switches the feature off.
+- A baseline is recorded only for content that was actually confirmed: a file whose MD5 matched, or - for types GOG gives no MD5 for (`.zip`, `.001`, ...) - a file with a known size that passed the size check (the zip test follows). Nothing is recorded when `-skipmd5` was used for a file that has an MD5, and nothing is recorded or compared for an MD5-less file that is flagged as changed (its recorded value may describe the old content).
+- If the BLAKE3 differs and the MD5 is known, the MD5 decides: a mismatch is reported as before (`wrong checksum (md5)`); a match means the stored BLAKE3 was stale, so it is refreshed with a warning. Without a usable MD5 (`-skipmd5`, or a type without MD5) the failure is reported as `changed since last verification (blake3)`. A file that fails is cleaned/deleted as usual and loses `prev_verified`.
+- A matching BLAKE3 clears the change mark exactly like an MD5 match (only an MD5-verified file can have one).
+- `update`: the BLAKE3 is carried over to the new entry when MD5, size and language are unchanged (also across a rename), and dropped when the MD5 changed. For an MD5-less file it is carried like `prev_verified`, and `-strict` drops it too. New entries get `blake3=None`; manifests from older versions simply lack the field.
+- New helper `hash_file()` computes MD5 and/or BLAKE3 in one read pass; `hashfile()` and `hashstream()` are unchanged.
+- The summary of `verify` gets three lines when BLAKE3 is active: matches, recorded, mismatches.
+- Files that were verified before this version have no baseline: run `verify -forceverify` once to record them (a normal `verify` skips files that are marked as verified). Files downloaded later are verified, and so recorded, by the next `verify`.
+- `tests/test_blake3.py`: the tests use a stand-in module with the same small interface, so they run without the package. The real package was **not** available where this entry was written, so it was not run against the real library; the code uses only `blake3.blake3(max_threads=blake3.blake3.AUTO)`, `update()`, `update_mmap(path)` and `hexdigest()`, each guarded with a fallback.
+
+DIFFERENCE: with the package installed, `verify` records BLAKE3 values in the manifest and `-forceverify` compares them instead of the MD5 for files that have one. Without the package, or with `-noblake3`, nothing changes.
+
 ## 0.5.37 - 03.11.2026 - JSON token storage and legacy changelog compatibility
 
 - Fix `handle_game_updates()` for older manifests that do not contain a `changelog` field.
