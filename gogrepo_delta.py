@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.40'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.41'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -364,6 +364,30 @@ class RunReport(object):
     def exit_status(self):
         return 1 if self.failures else 0
 
+    @staticmethod
+    def _folder_of(what):
+        parts = re.split(r'[\\/]', what, maxsplit=1)
+        return parts[0] if len(parts) == 2 else None
+
+    def _all_in_folders(self):
+        return all(self._folder_of(what) for what, _why in self.failures)
+
+    def _log_grouped_failures(self):
+        """Over the cap, one line per reason ('missing: 99 files in 14 games') and the games with their counts in a wrapped paragraph,
+        instead of 40 file names and 'and 59 more'. Refactoring: the same 99 files were already listed once per file by the command."""
+        groups = {}                                   # why -> {folder: number of files}, in order of first appearance
+        for what, why in self.failures:
+            folder = groups.setdefault(why or '(no reason given)', {})
+            folder[self._folder_of(what)] = folder.get(self._folder_of(what), 0) + 1
+        for why, folders in groups.items():
+            error('      %s: %d file%s in %d game%s' % (why, sum(folders.values()), '' if sum(folders.values()) == 1 else 's',
+                                                        len(folders), '' if len(folders) == 1 else 's'))
+            names = ['%s (%d)' % (name, count) for name, count in list(folders.items())[:self.MAX_LISTED_FAILURES]]
+            for line in textwrap.wrap(', '.join(names), width=100, initial_indent='         ', subsequent_indent='         '):
+                error(line)
+            if len(folders) > self.MAX_LISTED_FAILURES:
+                error('         ... and %d more games (see the messages above)' % (len(folders) - self.MAX_LISTED_FAILURES))
+
     def log(self, interrupted=False):
         if not (self.counts or self.failures or interrupted):
             return
@@ -374,10 +398,13 @@ class RunReport(object):
             info('   %-*s %d%s' % (width + 1, label + ':', amount, ' (%s)' % pretty_size(size) if size else ''))
         if self.failures:
             error('   FAILED: %d' % len(self.failures))
-            for what, why in self.failures[:self.MAX_LISTED_FAILURES]:
-                error('      %s%s' % (what, ': ' + why if why else ''))
-            if len(self.failures) > self.MAX_LISTED_FAILURES:
-                error('      ... and %d more (see the messages above)' % (len(self.failures) - self.MAX_LISTED_FAILURES))
+            if len(self.failures) > self.MAX_LISTED_FAILURES and self._all_in_folders():
+                self._log_grouped_failures()
+            else:
+                for what, why in self.failures[:self.MAX_LISTED_FAILURES]:
+                    error('      %s%s' % (what, ': ' + why if why else ''))
+                if len(self.failures) > self.MAX_LISTED_FAILURES:
+                    error('      ... and %d more (see the messages above)' % (len(self.failures) - self.MAX_LISTED_FAILURES))
         elif not interrupted:
             info('   no failures')
 
@@ -634,6 +661,7 @@ MANIFEST_SYNTAX_VERSION = 1
 RESUME_MANIFEST_SYNTAX_VERSION = 1
 
 token_lock = threading.RLock()
+MISSING_FILES_LISTED = 3     # verify names up to this many missing files per game; more are reported as one line per game
 
 class AuthExpired(SystemExit):
     """The token cannot be renewed: the user has to log in again.
@@ -6090,6 +6118,8 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
 
         zipSplitArchiveFailCache = []
 
+        game_missing = []      # Refactoring: the files of this game that are missing, reported together after the loop below
+        game_files = len(verify_downloads + verify_galaxyDownloads + verify_sharedDownloads + verify_extras)
         for itm in verify_downloads + verify_galaxyDownloads + verify_sharedDownloads +verify_extras:
             try:
                 _ = itm.prev_verified
@@ -6282,9 +6312,19 @@ def cmd_verify(gamedir, skipextras, skipids,  check_md5, check_filesize, check_z
                 if itm.prev_verified:
                     itm.prev_verified=False;
                     game_changed = True
-                warn('missing file %s' % itm_dirpath)
+                game_missing.append(itm_dirpath)
                 run_report.fail(itm_dirpath, 'missing')
                 missing_cnt += 1
+        if game_missing:
+            # Refactoring: a game that has not been downloaded (yet) printed one warning per file, 99 lines for 14 games. Up to
+            # MISSING_FILES_LISTED files are still named; beyond that one line per game says how many, and the names go to debug.
+            if len(game_missing) <= MISSING_FILES_LISTED:
+                for missing_path in game_missing:
+                    warn('missing file %s' % missing_path)
+            else:
+                warn('%s: %d of %d files missing' % (game.folder_name, len(game_missing), game_files))
+                for missing_path in game_missing:
+                    debug('missing file %s' % missing_path)
         if (game_changed):
             item_idx = item_checkdb(game.id, items)
             if item_idx is not None:
