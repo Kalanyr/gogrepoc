@@ -33,6 +33,31 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.40 - 05.11.2026 - Review fixes: download hang, token timeout, root file system, partial info files, macOS without PyObjC, Python 3.8 / 3.9
+
+- **Download threads could wait forever.** `_download_worker` asked `job.work.empty()` and then called `job.work.get()`. With several threads, two of them
+  could both see one file left; the second waited in `get()` for a file that never came, and `cmd_download` waited for that thread. It now takes files with
+  `get_nowait()` and stops on `queue.Empty`.
+- **The token refresh had no timeout** (`renew_token` called `session.get` without `timeout=`); a connection that stalled held `token_lock`, so every thread
+  waited. It now uses `http_timeout`, like every other request.
+- **An expired login in a download thread.** `renew_token` ended with `sys.exit(1)`; in a worker thread that only ended the thread, and the run reported
+  "a download thread stopped unexpectedly". It now raises `AuthExpired`, a `SystemExit` subclass (so in the main thread nothing changes: exit status 1, and no
+  `except Exception` can swallow it). A worker catches it, marks its file as failed with "login expired, run the login command again", and sets
+  `job.abort`, so the other workers take no new files; the files that were not started are reported with the same reason.
+- **`get_fs_type` never tried the root mount `/`**, so a folder on the root file system was "unknown" and was not preallocated (containers, one-partition installs).
+- **`ConditionalWriter` wrote its buffer even when the `with` body raised**, which could leave an incomplete `!info.txt`, `!serial.txt` or MD5 XML. It writes
+  nothing then. A changed existing file is now replaced atomically (`atomic_write_text`, permissions kept; in place as before if the folder is read-only).
+- **macOS without PyObjC.** `CoreFoundation` and `objc` were imported unconditionally, although the README lists PyObjC as optional. They are imported by
+  `_import_macos_modules()`; without them the `Wakelock` is skipped with one warning and the program runs.
+- **Python 3.8 and 3.9.** The check exited below 3.10, so the `specialPy3 = [3,8]` branch was dead. Now only versions below 3.8 stop; 3.8 and 3.9 print a
+  warning and carry on (`check_python_version()`). The one call that needed 3.10, `glob.glob(..., root_dir=...)` in the split-zip test of `verify`, is replaced by
+  `_multi_zip_parts()`. The syntax was checked for 3.8, but there is **no 3.8 / 3.9 in the test matrix**: they are best effort.
+- `tests/test_review_fixes.py`: 24 tests, one or more for each point above. (`assertNoLogs` in `tests/test_run_summary.py` needs 3.10; the tests themselves still
+  need 3.10.)
+
+DIFFERENCE: an expired login inside a download thread now stops the download run with "login expired" failures instead of a silent thread death; Python 3.8 and 3.9 start
+with a warning instead of exiting. Everything else only removes a hang, a wrong "unknown" or a corrupt write.
+
 ## 0.5.39 - 04.11.2026 - `-tags` and `-skiptags`: select games by the tags of your GOG library
 
 - The tags are the ones you made in your GOG library (for example "Favorites", "NEXT TO PLAY"). GOG sends them with the product list: every product has a list of tag ids, and the whole answer has the list of `{id, name}`. `update` now stores the **names** in the new field `tag_names` of every game in the manifest. Matching ignores case, accents, punctuation and spacing (`-tags "next to play"` finds `NEXT TO PLAY`); a game matches if it has **any** of the tags given.
