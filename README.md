@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.39-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.40-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -38,8 +38,8 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.39` |
-| **Python requirement** | Python 3.10 or newer |
+| **Current version** | `v0.5.40` |
+| **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
 | **Upstream project** | [kalanyr/gogrepoc](https://github.com/kalanyr/gogrepoc) |
@@ -104,7 +104,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 ### Required dependencies
 
-- Python **3.10 or newer**
+- Python **3.10 or newer** (3.8 / 3.9: starts with a warning, best effort, not covered by the tests)
 - `html5lib`
 - `requests`
 - `psutil`
@@ -534,7 +534,7 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.39 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.40 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
 
 At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 
