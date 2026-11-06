@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.41-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.42-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -38,7 +38,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.41` |
+| **Current version** | `v0.5.42` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -132,7 +132,7 @@ The script must be started with a Python interpreter; do not execute it as a she
   python -m pip install html2text
   ```
 
-- `blake3`: enables BLAKE3 checksums for `verify` (see [BLAKE3 checksums](#blake3-checksums)). Without it everything works as before, using MD5 only.
+- `blake3`: enables BLAKE3 checksums for `download` and `verify` (see [BLAKE3 checksums](#blake3-checksums)). Without it everything works as before, using MD5 only.
 
   ```bash
   python -m pip install blake3
@@ -299,7 +299,7 @@ python gogrepo_delta.py verify "/path/to/GOG games" --forceverify
 Useful options:
 - `--forceverify`: also verify files unchanged since their last successful verification.
 - `--skipmd5`, `--skipsize`, `--skipzip`: skip the corresponding check.
-- `--noblake3`: do not record or compare BLAKE3 checksums (see below).
+- `--noblake3`: do not record or compare BLAKE3 checksums (see below). Also accepted by `download`.
 - `--delete`: permanently delete files that fail integrity checks.
 - `--noclean`: leave files that fail integrity checks in place.
 - `--clean`: deprecated; cleaning is already the default.
@@ -318,11 +318,11 @@ Useful options:
 
 GOG publishes only MD5 checksums, so BLAKE3 cannot be compared with anything from GOG. Instead it is a **local fingerprint** kept in the manifest (field `blake3`), which needs the optional `blake3` package:
 
-- The first time a file passes `verify`, its BLAKE3 is recorded ("trust on first verify"). Both hashes are computed in the same read pass.
+- **`download` records it right after a file has arrived** (v0.5.42). The file is hashed once, in its download thread, and kept only if its content is confirmed (see below). `verify` then needs no first pass for it. A file you already had, or one downloaded without the package, gets its BLAKE3 the first time it passes `verify` ("trust on first verify"); both hashes are computed in the same read pass.
 - A later full check (`verify --forceverify`) compares only the recorded BLAKE3, which detects any change since the file last passed (for example bit rot) and is faster on fast disks. If the BLAKE3 differs and the MD5 is known, the MD5 decides: a mismatch is reported, a match means the stored BLAKE3 was stale and is refreshed.
 - Files verified with an older version have no recorded BLAKE3 yet: run `verify --forceverify` once to record them.
-- A BLAKE3 is recorded only for content that was actually confirmed (MD5 match, or for file types without MD5 a known size that matched). `--skipmd5` records nothing for files that have an MD5.
-- Use `--noblake3` (or `noblake3 = true` under `[verify]` in the config file) to switch the feature off. Without the package, `verify` says so once and behaves as before.
+- A BLAKE3 is recorded only for content that was actually confirmed (MD5 match, or for file types without MD5 a known size that matched). `--skipmd5` records nothing for files that have an MD5. After a download, a file whose MD5 in the manifest does not match what arrived gets no BLAKE3 and a warning (the download is kept; `verify` will report it). A file that is downloaded again because it changed never keeps the BLAKE3 of its old content.
+- Use `--noblake3` (or `noblake3 = true` under `[download]` / `[verify]` in the config file) to switch the feature off. Without the package, `download` and `verify` say so once and behave as before. A `download --dryrun` hashes nothing.
 
 ### `import`
 
@@ -534,7 +534,7 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.41 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.42 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
 
 At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 
