@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.41'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.42'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -3087,6 +3087,7 @@ def build_parser():
     g5.add_argument('-lang', action='extend', help="download game files only for language(s) (default: the language of your system, en if unknown)", nargs='*', default=[])
     g5.add_argument('-skiplang', action='extend', help='skip downloading game files for language(s)', nargs='*', default=[])
     g1.add_argument('-skippreallocation',action='store_true',help='do not preallocate space for files')
+    g1.add_argument('-noblake3', action='store_true', help='do not record a BLAKE3 checksum for each downloaded file (needs the optional blake3 package)')
     add_common_flags(g1)
 
 
@@ -4882,6 +4883,8 @@ class _DownloadJob(object):
         self.provisional_dict = dict()            # dest_file -> work item, becomes self.work_provisional
         self.lock = threading.Lock()
         self.abort = threading.Event()            # set by a worker whose login expired: the others stop taking new files
+        self.use_blake3 = False                   # Entry 42: record a BLAKE3 for each file that arrived (set by cmd_download)
+        self.blake3 = {}                          # dest_file -> BLAKE3 computed by the worker, stored in the manifest by _finish_provisional_downloads
 
 
 def _select_download_items(items, ids, skipids, skipfiles):
@@ -5607,6 +5610,26 @@ def _download_without_chunk_verification(job, tid, href, path, downloading_path,
     return succeed
 
 
+def _download_blake3(item, file_path):
+    """Entry 42: the BLAKE3 of a file that has just arrived, or None if there is nothing to record (the caller keeps the download either way).
+    The same rule as in verify: a baseline only exists for confirmed content. With an md5 in the manifest, md5 and BLAKE3 are computed in one read
+    pass and the BLAKE3 is kept only if the md5 matches; without one (types GOG gives no md5 for), the known size must match."""
+    try:
+        if getattr(item, 'md5', None) is not None:
+            hashes = hash_file(file_path, md5=True, blake3=True)
+            if hashes['md5'] != item.md5:
+                warn('no BLAKE3 recorded for %s: its md5 differs from the manifest (run verify to check it)' % os.path.basename(file_path))
+                return None
+            return hashes['blake3']
+        size = getattr(item, 'size', None)
+        if size is None or os.path.getsize(file_path) != size:
+            return None
+        return hash_file(file_path, md5=False, blake3=True)['blake3']
+    except Exception as e:          # a failure here must never turn a good download into a failed one
+        warn('no BLAKE3 recorded for %s (%s)' % (os.path.basename(file_path), e))
+        return None
+
+
 def _download_worker(job):
     """Main loop of a downloader thread: takes files from job.work until it is empty."""
     # Refactoring: was the closure 'worker' inside cmd_download.
@@ -5637,6 +5660,12 @@ def _download_worker(job):
                     shutil.move(downloading_path,provisional_path)
                 #This should be thread safe so should be fine outside the lock, doing it after the lock so we don't add this if something went wrong.
                 job.work_provisional.put((path,provisional_path,writable_game_item,work_writable_items))
+                if job.use_blake3 and writable_game_item is not None:
+                    # Entry 42: hashed here, in the thread, while the file is still in the disk cache and the other threads keep downloading
+                    b3 = _download_blake3(writable_game_item, provisional_path)
+                    if b3:
+                        with job.lock:
+                            job.blake3[path] = b3
             else:
                 with job.lock:
                     info("not moving uncompleted download '%s', success: %s remaining bytes: %d / %d " % (downloading_path,str(succeed),job.sizes[path],sz))
@@ -5732,6 +5761,17 @@ def _finish_provisional_downloads(job):
             if writable_game_item.prev_verified:
                 writable_game_item.prev_verified = False
                 wChanged = True
+            # Entry 42: the BLAKE3 of the file that has just arrived. A file recovered from an earlier run was not hashed by a worker: do it now.
+            b3 = job.blake3.pop(path, None) if job.use_blake3 else None
+            if b3 is None and job.use_blake3 and path in job.provisional_dict:
+                b3 = _download_blake3(writable_game_item, path)
+            if b3:
+                if getattr(writable_game_item, 'blake3', None) != b3:
+                    writable_game_item.blake3 = b3
+                    wChanged = True
+            elif getattr(writable_game_item, 'blake3', None) and job.transferred.get(path, 0) > 0:
+                writable_game_item.blake3 = None     # new content came in and no new BLAKE3 could be recorded: the old one no longer describes the file
+                wChanged = True
     if wChanged:
         save_manifest(work_writable_items)
 
@@ -5750,11 +5790,16 @@ def _remove_empty_subdirs(root_dir, skip_dir=None):
                         pass
 
 
-def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,skipgalaxy,skipstandalone,skipshared, skipfiles,covers,backgrounds,skippreallocation,clean_old_images,downloadLimit = None, lang_fallback=None):
+def cmd_download(savedir, skipextras,skipids, dryrun, ids,os_list, lang_list,skipgalaxy,skipstandalone,skipshared, skipfiles,covers,backgrounds,skippreallocation,clean_old_images,downloadLimit = None, lang_fallback=None, use_blake3=True):
     downloadSession = None
     if not dryrun:
         downloadSession = makeGOGSession()
     job = _DownloadJob(downloadSession, skippreallocation, downloadLimit)
+    if use_blake3 and not dryrun:
+        if blake3_available():
+            job.use_blake3 = True
+        else:
+            info('the blake3 package is not installed, so no BLAKE3 checksums are recorded for the downloads (python -m pip install blake3; -noblake3 hides this message)')
 
     items = load_manifest()
     all_items = items
@@ -6668,7 +6713,7 @@ def main(args):
             time.sleep(args.wait * 60 * 60)
         if args.downloadlimit is not None:
             args.downloadlimit = args.downloadlimit*1024.0*1024.0 #Convert to Bytes
-        cmd_download(args.savedir, args.skipextras, args.skipids, args.dryrun, args.ids,args.os,args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles,args.covers,args.backgrounds,args.skippreallocation,not args.nocleanimages,args.downloadlimit,lang_fallback=args.lang_fallback)
+        cmd_download(args.savedir, args.skipextras, args.skipids, args.dryrun, args.ids,args.os,args.lang,args.skipgalaxy,args.skipstandalone,args.skipshared, args.skipfiles,args.covers,args.backgrounds,args.skippreallocation,not args.nocleanimages,args.downloadlimit,lang_fallback=args.lang_fallback,use_blake3=not args.noblake3)
     elif args.command == 'import':
         args.skipgames = False
         args.skipextras = False

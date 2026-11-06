@@ -33,6 +33,21 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.42 - 06.11.2026 - `download` records the BLAKE3 of each file right after it arrived
+
+- **New:** with the optional `blake3` package installed, `cmd_download` hashes every file that has arrived and stores the result in the `blake3` field of its manifest entry,
+  so a `verify` that follows does not have to be the "first verify" for it. The hashing runs in the downloader thread that finished the file (`_download_blake3()`, called
+  after the move to `!provisional`), so it overlaps with the other downloads and reads a file that is still in the disk cache; the value is written to the manifest by
+  `_finish_provisional_downloads()` together with the flags it already resets, in the same single save. Files recovered from an earlier run (already in `!provisional`) are hashed there.
+- **The same rule as `verify`: only confirmed content gets a baseline.** With an md5 in the manifest, md5 and BLAKE3 are computed in one read pass and the BLAKE3 is kept only if the md5
+  matches (a mismatch logs a warning, keeps the download and records nothing; `verify` will report it). Without an md5 (types GOG gives no md5 for) the known size must match.
+- **A re-downloaded file never keeps the BLAKE3 of its old content:** if new data came in and no new BLAKE3 could be recorded (no package, `-noblake3`, md5 mismatch), the old value is removed.
+- New option `-noblake3` for `download` (also in the config file); without the package `download` says so once, like `verify` (not on a dry run, which hashes nothing).
+  A failure while hashing only produces a warning; it never makes a download fail. `prev_verified` is untouched: only `verify` marks a file as verified.
+- `tests/test_download_blake3.py`: 11 tests on 8 new scenarios of the download rig (`blake3_*`). The rig now patches `_blake3` to `None` unless a scenario asks for the stand-in, so the results do not depend on whether the package is installed on the machine.
+
+DIFFERENCE: with `blake3` installed, `download` adds the field `blake3` to the manifest entries of the files it fetched and reads each finished file once more. Without the package, or with `-noblake3`, nothing changes except the one-line notice.
+
 ## 0.5.41 - 06.11.2026 - Less console output when many files are missing
 
 - **`verify`: one line per game.** A game that was not downloaded (yet) printed one `missing file ...` warning per file, 99 lines for 14 games, and
