@@ -513,6 +513,59 @@ class Cap(logging.Handler):
     def emit(self, r): self.records.append((r.levelname, r.getMessage()))
 PROGRESS = re.compile(r'^\s*[\d.]+MB\s+[\d.]+MB/s|^[\d.]+GB remaining$')
 
+# ----------------------------------------------------------------------------- BLAKE3 recorded after a download (entry 42)
+def blake3_stand_in(m):
+    """A BLAKE2b module with the small interface of the blake3 package, patched in as the script's _blake3."""
+    import types
+    class Hasher:
+        AUTO = -1
+        def __init__(self, max_threads=1): self._h = hashlib.blake2b(digest_size=32)
+        def update(self, data): self._h.update(data)
+        def hexdigest(self): return self._h.hexdigest()
+    return [(m, '_blake3', types.SimpleNamespace(blake3=Hasher))]
+
+def b3_of(data): return hashlib.blake2b(data, digest_size=32).hexdigest()
+
+@scenario
+def sc_blake3_fresh(srv, root):
+    w = standard_world(srv)
+    w.items[0]['downloads'][1]['md5'] = None                  # setup_alpha-1.bin: a type GOG gives no md5 for (and no checksum data)
+    return dict(items=w.items, kwargs={}, patch=blake3_stand_in)
+@scenario
+def sc_blake3_off(srv, root):
+    w = standard_world(srv)
+    return dict(items=w.items, kwargs=dict(use_blake3=False), patch=blake3_stand_in)
+@scenario
+def sc_blake3_missing_package(srv, root):
+    w = standard_world(srv)
+    return dict(items=w.items, kwargs={})
+@scenario
+def sc_blake3_dry_run(srv, root):
+    w = standard_world(srv)
+    return dict(items=w.items, kwargs=dict(dryrun=True), patch=blake3_stand_in)
+@scenario
+def sc_blake3_md5_differs(srv, root):
+    w = standard_world(srv)
+    w.items[0]['downloads'][0]['md5'] = '0' * 32              # the checksum data of the server is fine, the manifest's md5 is not
+    return dict(items=w.items, kwargs={}, patch=blake3_stand_in)
+@scenario
+def sc_blake3_replaced(srv, root):
+    w = standard_world(srv)
+    e = w.items[0]['downloads'][0]                            # a changed file: old content on disk, old BLAKE3 in the manifest
+    e['blake3'] = 'stale'; e['force_change'] = True; e['prev_verified'] = True
+    def setup(r): put(r, 'alpha/setup_alpha.exe', b'old content' * 50)
+    return dict(items=w.items, kwargs={}, setup=setup, patch=blake3_stand_in)
+@scenario
+def sc_blake3_dropped(srv, root):
+    d = sc_blake3_replaced(srv, root)
+    d.pop('patch')                                            # same, but no blake3 package this time
+    return d
+@scenario
+def sc_blake3_recovered(srv, root):
+    d = SCENARIOS['provisional_only'](srv, root)              # manual.pdf was finished by an earlier run and only has to be moved
+    d['patch'] = blake3_stand_in
+    return d
+
 def snapshot_tree(root):
     out = {}
     for d, dirs, files in os.walk(root):
@@ -569,6 +622,7 @@ def run(mod, name):
                (mod, 'HTTP_TIMEOUT', spec.get('timeout', mod.HTTP_TIMEOUT)), (os, 'posix_fallocate', fallocate)]
     patches.append((platform, 'system', lambda: plat))
     if plat == 'Windows': patches.append((ctypes, 'windll', SimpleNamespace(kernel32=FakeKernel32(calls, spec.get('windows_fail'), spec.get('windows_fail_late'), spec.get('windows_raises')))))
+    patches.append((mod, '_blake3', None))
     patches += spec.get('patch', lambda m: [])(mod)
     logger = logging.getLogger('gogrepoc'); old_handlers, old_level = logger.handlers[:], logger.level
     cap = Cap(); logger.handlers = [cap]; logger.setLevel(logging.INFO)

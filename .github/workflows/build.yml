@@ -61,7 +61,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          pip install pyobjc-framework-CoreFoundation
+          python -m pip install pyobjc-framework-Cocoa
 
       - name: Run tests
         shell: bash

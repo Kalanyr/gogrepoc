@@ -218,6 +218,7 @@ class MacOSWithoutPyObjCTests(unittest.TestCase):
             wakelock.release_wakelock()
             wakelock.take_wakelock()
         self.assertEqual(1, warn.call_count)
+        self.assertIn('pyobjc-framework-Cocoa', warn.call_args[0][0])    # the package that provides CoreFoundation and objc (there is no separate CoreFoundation one)
 
 
 class PythonVersionTests(unittest.TestCase):
