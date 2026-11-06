@@ -33,6 +33,15 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.43 - 06.11.2026 - The PyObjC package to install is `pyobjc-framework-Cocoa`
+
+- The macOS build in `build.yml` failed at "Install macOS-only dependencies" (`No matching distribution found for pyobjc-framework-CoreFoundation`): that package name does not
+  exist. The `CoreFoundation` module (and, through its dependency `pyobjc-core`, the `objc` module) comes with **`pyobjc-framework-Cocoa`**, which `tests.yml` already used.
+  `build.yml` now installs that one, with `python -m pip` like the other steps.
+- The hint printed when PyObjC is missing (added in 0.5.40) named the wrong package too; it now says `python -m pip install pyobjc-framework-Cocoa`. The test for that warning checks the name.
+
+DIFFERENCE: only a message and the CI file change.
+
 ## 0.5.42 - 06.11.2026 - `download` records the BLAKE3 of each file right after it arrived
 
 - **New:** with the optional `blake3` package installed, `cmd_download` hashes every file that has arrived and stores the result in the `blake3` field of its manifest entry,

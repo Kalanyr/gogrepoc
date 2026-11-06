@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.42'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.43'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -6802,7 +6802,7 @@ class Wakelock:
             return True
         if not getattr(self, '_warned_no_pyobjc', False):
             self._warned_no_pyobjc = True
-            warn("PyObjC is not installed, so the computer is not kept awake during the run (python -m pip install pyobjc-framework-CoreFoundation)")
+            warn("PyObjC is not installed, so the computer is not kept awake during the run (python -m pip install pyobjc-framework-Cocoa)")
         return False
 
     def _CFSTR(self,py_string):
