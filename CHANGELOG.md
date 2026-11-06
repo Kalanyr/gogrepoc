@@ -33,6 +33,18 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.41 - 06.11.2026 - Less console output when many files are missing
+
+- **`verify`: one line per game.** A game that was not downloaded (yet) printed one `missing file ...` warning per file, 99 lines for 14 games, and
+  the same files were listed again in the run summary. Up to `MISSING_FILES_LISTED` (3) missing files of a game are still named; beyond that one line
+  says `game: 6 of 6 files missing`, and the names go to the debug level (run with `-debug` to see them). Every missing file still counts as a failure (exit status, summary).
+- **Grouped failure list in the run summary.** When there are more failures than `max_listed_failures` and all of them are files inside game folders, the summary
+  shows one line per reason (`missing: 99 files in 14 games`) and the games with their number of files in a wrapped paragraph, instead of the first 40 file names and
+  "and 59 more". A short list still names every file, and failures without a folder keep the old cut-off.
+- `tests/test_failure_summary.py`: 9 tests.
+
+DIFFERENCE: only the wording and amount of console / log output changes. No file is treated differently, and the counts, exit status and manifest are as before.
+
 ## 0.5.40 - 05.11.2026 - Review fixes: download hang, token timeout, root file system, partial info files, macOS without PyObjC, Python 3.8 / 3.9
 
 - **Download threads could wait forever.** `_download_worker` asked `job.work.empty()` and then called `job.work.get()`. With several threads, two of them
