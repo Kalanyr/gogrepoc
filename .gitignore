@@ -14,6 +14,7 @@ cookies.*
 cookies*.*
 *cookies*
 *cookies*.*
+*.patch
 
 # Authentication token (encrypted by default; may be plaintext by explicit opt-in)
 gog-token.json

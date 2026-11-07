@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.43'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.47'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -677,7 +677,7 @@ POSIX_PREALLOCATION_FS = ["exfat","vfat","ntfs","btrfs", "ext4", "ocfs2", "xfs"]
 
 
 #request wrapper
-def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None,quiet_statuses=()):
+def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay=None,stream=False,data=None,quiet_statuses=(),no_retry_statuses=()):
     """Performs web request to url with optional retries, delay, and byte range.
     """
     _retry = False
@@ -700,7 +700,7 @@ def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay
         response.raise_for_status()
     except (requests.HTTPError, requests.URLRequired, requests.Timeout,requests.ConnectionError,requests.exceptions.SSLError) as e:
         if isinstance(e, requests.HTTPError):
-            if e.response.status_code in HTTP_PERM_ERRORCODES:  # do not retry these HTTP codes
+            if e.response.status_code in HTTP_PERM_ERRORCODES or e.response.status_code in no_retry_statuses:  # do not retry these HTTP codes (no_retry_statuses: only for this call)
                 if e.response.status_code in quiet_statuses:  # caller handles (and reports) this status itself
                     debug('request failed: %s.  will not retry.', e)
                 else:
@@ -713,7 +713,7 @@ def request(session,url,args=None,byte_range=None,retries=HTTP_RETRY_COUNT,delay
 
         if _retry:
             warn('request failed: %s (%d retries left) -- will retry in %ds...' % (e, retries, HTTP_RETRY_DELAY))
-            return request(session=session,url=url, args=args, byte_range=byte_range, retries=retries-1, delay=HTTP_RETRY_DELAY,stream=stream,data=data,quiet_statuses=quiet_statuses)
+            return request(session=session,url=url, args=args, byte_range=byte_range, retries=retries-1, delay=HTTP_RETRY_DELAY,stream=stream,data=data,quiet_statuses=quiet_statuses,no_retry_statuses=no_retry_statuses)
     return response
 
 #Request Head weapper
@@ -3194,6 +3194,15 @@ def build_parser():
     g1.add_argument('-delimiter', action='store', default=None, help="column separator; default is ';' for most languages (what their Excel expects) and ',' for English, Japanese, Chinese, Korean, Thai and Hebrew")
     add_common_flags(g1)
 
+    g1 = sp1.add_parser('wishlist', help='Save your GOG wishlist (titles, store links, optionally prices) and show what changed since the last run')
+    g1.add_argument('-output', action='store', default=WISHLIST_FILENAME, help='file to save the wishlist to, and to compare with the next time (default: %s)' % WISHLIST_FILENAME)
+    g1.add_argument('-csv', action='store', nargs='?', const=WISHLIST_CSV_FILENAME, default=None, metavar='FILE', help='also write the wishlist as a spreadsheet (CSV file) to this file (default file name: %s)' % WISHLIST_CSV_FILENAME)
+    g1.add_argument('-prices', action='store_true', help='also fetch the price of every game (one more request per game)')
+    g1.add_argument('-country', action='store', default=None, help='two-letter country code (like DE, GB, US): the prices are for it (default: US) and the release dates of the CSV are written the way it does')
+    g1.add_argument('-currency', action='store', default=None, help='currency to show when GOG gives several for the country, like EUR (default: the first one)')
+    g1.add_argument('-delimiter', action='store', default=None, help="column separator of the CSV file; default is ';' for most languages (what their Excel expects) and ',' for English, Japanese, Chinese, Korean, Thai and Hebrew")
+    add_common_flags(g1)
+
     g1 = sp1.add_parser('clean', help='Clean your games directory of files not known by manifest')
     g1.add_argument('cleandir', action='store', help='root directory containing gog games to be cleaned')
     g1.add_argument('-dryrun', action='store_true', help='do not move files, only display what would be cleaned')
@@ -3407,6 +3416,10 @@ CONFIG_NOTES = [
     (None, (('skipfiles', 'file names or glob patterns to skip'),)),
     (None, (('downloadlimit', 'limit downloads to about this many MB'),
             ('skippreallocation', 'do not preallocate space for files'))),
+    (('wishlist',), (('csv', 'also write the wishlist as a spreadsheet (CSV file) to this file (gog-wishlist.csv if no file name is given)'),
+                     ('prices', 'also fetch the price of every game'),
+                     ('country', 'two-letter country code: the prices are for it (default US) and the CSV writes the release dates the way it does'),
+                     ('currency', 'currency to show when GOG gives several for the country, like EUR'))),
     (('import',), (('src_dir', 'folder to import games from'),
                    ('dest_dir', 'folder to copy and name the imported files to'))),
     (('backup',), (('src_dir', 'folder containing the GOG items to back up'),
@@ -3890,6 +3903,26 @@ def _token_crypto():
     return AESGCM
 
 
+TOKEN_PASSWORD_ATTEMPTS = 3        # how often a wrong password is asked for again when someone is there to type it
+
+
+class TokenPasswordError(ValueError):
+    """The token file could not be decrypted with the passwords that were typed (or it is damaged)."""
+
+
+def _forget_token_password():
+    global _TOKEN_PASSWORD
+    _TOKEN_PASSWORD = None
+
+
+def _can_prompt_again():
+    """True when the program is run from a terminal, so that asking for the password again makes sense (not in a scheduled task or a pipe)."""
+    try:
+        return bool(sys.stdin and sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def _token_password(create=False):
     """Ask once per process; never persist the password or accept it on the command line."""
     global _TOKEN_PASSWORD
@@ -3903,9 +3936,10 @@ def _token_password(create=False):
                 raise ValueError('Token passwords do not match')
             _TOKEN_PASSWORD = first
         else:
-            _TOKEN_PASSWORD = getpass.getpass('Password for gog-token.json: ')
-            if not _TOKEN_PASSWORD:
+            typed = getpass.getpass('Password for gog-token.json: ')
+            if not typed:                   # Refactoring: the empty answer used to stay in _TOKEN_PASSWORD, so a second call did not ask again
                 raise ValueError('Token password must not be empty')
+            _TOKEN_PASSWORD = typed
     return _TOKEN_PASSWORD
 
 
@@ -3962,12 +3996,26 @@ def _read_token_json(filepath):
         ciphertext = base64.b64decode(envelope['ciphertext'], validate=True)
         if len(salt) != 16 or len(nonce) != 12:
             raise ValueError('invalid encrypted token parameters')
-        key = _token_key(_token_password(), salt, int(envelope['kdf_n']), int(envelope['kdf_r']), int(envelope['kdf_p']))
-        try:
-            plaintext = AESGCM(key).decrypt(nonce, ciphertext, _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
-        except Exception:
-            # Do not fall back to the legacy token file on a bad password or damaged ciphertext.
-            raise ValueError('could not decrypt token file (wrong password or damaged file)')
+        # A wrong (or empty) password is asked for again, up to TOKEN_PASSWORD_ATTEMPTS times, if there is a terminal; otherwise one attempt.
+        attempts = TOKEN_PASSWORD_ATTEMPTS if _can_prompt_again() else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                password = _token_password()
+            except ValueError:                                  # nothing was typed
+                if attempt == attempts:
+                    raise
+                error('The password must not be empty. Please try again (%d of %d).' % (attempt, attempts))
+                continue
+            key = _token_key(password, salt, int(envelope['kdf_n']), int(envelope['kdf_r']), int(envelope['kdf_p']))
+            try:
+                plaintext = AESGCM(key).decrypt(nonce, ciphertext, _TOKEN_ENVELOPE_FORMAT.encode('ascii'))
+                break
+            except Exception:
+                _forget_token_password()                        # the wrong one must not be kept and used again
+                if attempt == attempts:
+                    # Do not fall back to the legacy token file on a bad password or damaged ciphertext.
+                    raise TokenPasswordError('could not decrypt token file (wrong password or damaged file)')
+                error('Wrong password. Please try again (%d of %d).' % (attempt, attempts))
         token = json.loads(plaintext.decode('utf-8'))
     else:
         raise ValueError('unsupported token encryption mode: %r' % encryption)
@@ -5940,6 +5988,253 @@ def cmd_export(output='gog-library.csv', savedir=None, delimiter=None):
     info("wrote %d files of %d games to %s (column separator '%s')" % (rows, len(items), output, delimiter))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# wishlist (entry 44): the games on the GOG wishlist are not owned, so there is nothing to download for them; this saves the list
+# (titles, store links, optionally prices) and shows what changed since the last run.
+# The endpoints are not officially documented: embed.gog.com/user/wishlist.json answers {"wishlist": {"<id>": true, ...}, "checksum": ...};
+# api.gog.com/products/<id> has the title; api.gog.com/products/<id>/prices?countryCode=DE lists the prices per currency as
+# "<amount in cents> <currency>" strings (for example "999 EUR" for 9.99 EUR).
+WISHLIST_FILENAME = r'gog-wishlist.json'
+WISHLIST_CSV_FILENAME = r'gog-wishlist.csv'      # what -csv without a file name writes
+WISHLIST_FORMAT = 1
+
+
+class WishlistError(Exception):
+    pass
+
+
+def parse_gog_money(text):
+    """('1999 EUR') -> (1999, 'EUR'): GOG writes prices as the amount in the smallest unit (cents) and the currency code. None if it is not that."""
+    match = re.match(r'^\s*(-?\d+)\s+([A-Za-z]{3})\s*$', text) if isinstance(text, str) else None
+    return (int(match.group(1)), match.group(2).upper()) if match else None
+
+
+def choose_price(price_list, currency=None):
+    """The price entry of GOG's list (one per currency) as {'currency', 'base', 'final', 'promo'} in cents, for the wanted currency or, without one,
+    the first usable entry. None if there is none."""
+    wanted = currency.upper() if currency else None
+    for entry in price_list or []:
+        base, final = parse_gog_money(entry.get('basePrice')), parse_gog_money(entry.get('finalPrice'))
+        code = ((entry.get('currency') or {}).get('code') or '').upper()
+        if base is None or final is None or not code or (wanted and code != wanted):
+            continue
+        return {'currency': code, 'base': base[0], 'final': final[0], 'promo': entry.get('promoId') or None}
+    return None
+
+
+# How a date is written in the country of the prices (the day-month-year order and the separators); other countries get the ISO form 2026-06-23.
+_DATE_FORMATS = {}
+for _pattern, _countries in (
+        ('%d.%m.%Y', 'DE AT CH LI LU PL CZ SK SI HR RS BA ME MK BG RO RU UA BY FI NO IS TR EE LV DK'),
+        ('%d/%m/%Y', 'GB IE FR ES IT PT BE GR CY MT AU NZ IN ZA BR AR CL CO PE MX SG HK MY TH VN ID IL AE SA EG MA'),
+        ('%m/%d/%Y', 'US PH'),
+        ('%d-%m-%Y', 'NL'),
+        ('%Y/%m/%d', 'JP CN TW'),
+        ('%Y. %m. %d.', 'KR HU')):
+    for _country in _countries.split():
+        _DATE_FORMATS[_country] = _pattern
+
+
+def format_release_date(text, country=None):
+    """The date part of GOG's release date ('2026-06-23T18:59:00+0200') written the way people in that country write it: DE 23.06.2026,
+    GB 23/06/2026, US 06/23/2026; ISO (2026-06-23) without a country or for one that is not in the list. The day is the one in the text (no
+    time zone conversion). Something that is not a date comes back unchanged."""
+    match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', text) if isinstance(text, str) else None
+    if not match:
+        return text or ''
+    year, month, day = match.groups()
+    pattern = _DATE_FORMATS.get((country or '').upper(), '%Y-%m-%d')
+    return pattern.replace('%Y', year).replace('%m', month).replace('%d', day)
+
+
+def format_money(cents, currency, decimal='.'):
+    return ('%d.%02d' % divmod(cents, 100)).replace('.', decimal) + ((' ' + currency) if currency else '')
+
+
+def fetch_wishlist_ids(session):
+    """The product ids on the wishlist of the logged-in account, as strings."""
+    response = request(session, GOG_EMBED_URL + '/user/wishlist.json')
+    try:
+        data = response.json()
+    except ValueError:
+        raise WishlistError('GOG did not answer with a wishlist (the login may have expired: run the login command again)')
+    wishlist = data.get('wishlist') if isinstance(data, dict) else None
+    if isinstance(wishlist, list):          # an empty wishlist comes as [] and not as {} (a list of ids is accepted too)
+        wishlist = {str(i): True for i in wishlist}
+    if not isinstance(wishlist, dict):
+        raise WishlistError('the answer of GOG has no "wishlist" list')
+    ids = [str(key) for key, wanted in wishlist.items() if wanted]
+    return sorted(ids, key=lambda i: (0, int(i)) if i.isdigit() else (1, i))
+
+
+def fetch_wishlist_details(session, product_id):
+    """{'title', 'slug', 'release_date', 'store_url'} of a product, or None if GOG does not know it (any more)."""
+    try:
+        data = request(session, GOG_API_URL + '/products/{}'.format(product_id), quiet_statuses=(404,)).json()
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            return None
+        raise
+    slug = data.get('slug')
+    store_url = (data.get('links') or {}).get('product_card') or (('https://www.gog.com/game/' + slug) if slug else None)
+    return {'title': data.get('title'), 'slug': slug, 'release_date': data.get('release_date'), 'store_url': store_url}
+
+
+def fetch_wishlist_price(session, product_id, country, currency=None):
+    """The price of a product (see choose_price), or None if it has none (not on sale in the store, or not for that country)."""
+    try:
+        data = request(session, GOG_API_URL + '/products/{}/prices'.format(product_id), args={'countryCode': country}, quiet_statuses=(400, 404),
+                       no_retry_statuses=(400,)).json()
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else None
+        if status == 404:
+            return None
+        if status == 400:       # GOG's answer to a country it does not know, for example UK (the code is GB)
+            raise WishlistError("GOG does not accept '%s' as a country for the prices; use the two-letter ISO code, for example GB for the United Kingdom" % country)
+        raise
+    return choose_price(((data.get('_embedded') or {}).get('prices')), currency)
+
+
+def load_wishlist(path):
+    """{id: entry} of the last saved wishlist, or None for a first run (no file, or one that cannot be read)."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        games = data['games']
+        if not isinstance(games, dict):
+            raise ValueError('"games" is not a list')
+        return games
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        warn("the saved wishlist '%s' cannot be read (%s); treating this as a first run" % (path, e))
+        return None
+
+
+def wishlist_changes(old, new, library_ids=()):
+    """What changed between two saved wishlists ({id: entry}): lists of ids 'added', 'removed', 'now_owned' (removed and in the library),
+    'cheaper' and 'dearer' (the final price in the same currency changed)."""
+    library_ids = set(str(i) for i in library_ids)
+    changes = {'added': [], 'removed': [], 'now_owned': [], 'cheaper': [], 'dearer': []}
+    for game_id in new:
+        if game_id not in old:
+            changes['added'].append(game_id)
+            continue
+        before, after = old[game_id].get('price'), new[game_id].get('price')
+        if before and after and before.get('currency') == after.get('currency') and before.get('final') != after.get('final'):
+            changes['cheaper' if after['final'] < before['final'] else 'dearer'].append(game_id)
+    for game_id in old:
+        if game_id not in new:
+            changes['removed'].append(game_id)
+            if game_id in library_ids:
+                changes['now_owned'].append(game_id)
+    return changes
+
+
+def write_wishlist_csv(path, games, library_ids, delimiter, country=None):
+    decimal = ',' if delimiter == ';' else '.'          # a spreadsheet that wants ';' between columns writes decimals with a comma
+    columns = ['game id', 'title', 'release date', 'store url', 'in library', 'currency', 'regular price', 'price', 'discount %', 'promo']
+    with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.writer(f, delimiter=delimiter)
+        writer.writerow(columns)
+        for game_id, game in sorted(games.items(), key=lambda kv: str(kv[1].get('title') or '').lower()):
+            price = game.get('price') or {}
+            discount = ''
+            if price and price.get('base'):
+                discount = int(round(100.0 * (price['base'] - price['final']) / price['base']))
+            writer.writerow([game_id, game.get('title') or '', format_release_date(game.get('release_date'), country), game.get('store_url') or '',
+                             'yes' if str(game_id) in library_ids else 'no', price.get('currency', ''),
+                             format_money(price['base'], '', decimal) if price else '', format_money(price['final'], '', decimal) if price else '',
+                             discount, price.get('promo') or ''])
+
+
+def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, country=None, currency=None, delimiter=None):
+    """Save the GOG wishlist to a JSON file and say what changed since the last run: new games, removed games (and those that are now in the
+    library), and with prices the games that became cheaper or dearer. The details of a game are fetched once and kept in the file."""
+    country = (country or '').strip().upper()
+    if country == 'UK':
+        info("'UK' is not an ISO country code; using GB")
+        country = 'GB'
+    if country and not re.match(r'^[A-Z]{2}$', country):
+        error("-country must be a two-letter country code like DE or US (got '%s')" % country)
+        run_report.fail('wishlist', 'invalid country')
+        return
+    price_country = country or 'US'                       # the prices need a country; the dates of the CSV are only formatted for one that was given
+    session = makeGOGSession()
+    previous = load_wishlist(output)
+    try:
+        ids = fetch_wishlist_ids(session)
+    except (WishlistError, requests.RequestException) as e:
+        error('could not read the wishlist: %s' % e)
+        run_report.fail('wishlist', 'could not be read')
+        return
+    try:
+        library_ids = set(str(g.id) for g in load_manifest())
+    except Exception:                                          # the comparison with the library is a bonus
+        library_ids = set()
+    games = {}
+    for game_id in ids:
+        old = (previous or {}).get(game_id) or {}
+        entry = dict(old) if old.get('title') else {}
+        entry['id'] = game_id
+        if not entry.get('title'):
+            try:
+                details = fetch_wishlist_details(session, game_id)
+            except requests.RequestException as e:
+                warn('no details for wishlist game %s: %s' % (game_id, e))
+                run_report.fail(game_id, 'details not available')
+                details = None
+            if details is None:
+                warn('GOG has no details for wishlist game %s (not in the store any more?)' % game_id)
+            else:
+                entry.update(details)
+        if prices:
+            try:
+                entry['price'] = fetch_wishlist_price(session, game_id, price_country, currency)
+            except WishlistError as e:                          # GOG does not accept the country: asking again for every game would not help
+                error(str(e))
+                run_report.fail('prices', 'country not accepted')
+                prices = False
+                entry['price'] = old.get('price')
+            except requests.RequestException as e:
+                warn('no price for %s: %s' % (entry.get('title') or game_id, e))
+                run_report.fail(entry.get('title') or game_id, 'price not available')
+                entry['price'] = old.get('price')               # keep what was known, so that no change is reported by mistake
+        else:
+            entry['price'] = old.get('price')
+        games[game_id] = entry
+    run_report.count('wishlist games', len(games))
+
+    def name(game_id):
+        return (games.get(game_id) or (previous or {}).get(game_id) or {}).get('title') or game_id
+
+    def money(price):
+        return format_money(price['final'], price['currency']) if price else 'no price'
+
+    info('the wishlist has %d games' % len(games))
+    if previous is None:
+        info('first run: nothing to compare with yet')
+    else:
+        changes = wishlist_changes(previous, games, library_ids)
+        for game_id in changes['added']:
+            info('new on the wishlist: %s%s' % (name(game_id), (' (' + money(games[game_id].get('price')) + ')') if games[game_id].get('price') else ''))
+        for game_id in changes['removed']:
+            info('no longer on the wishlist: %s%s' % (name(game_id), ' (now in your library)' if game_id in changes['now_owned'] else ''))
+        for label, key in (('cheaper', 'cheaper'), ('dearer', 'dearer')):
+            for game_id in changes[key]:
+                info('%s: %s -> %s (%s)' % (name(game_id), money(previous[game_id].get('price')), money(games[game_id].get('price')), label))
+        if not any(changes.values()):
+            info('no changes since the last run')
+    state = {'format': WISHLIST_FORMAT, 'saved': datetime.datetime.now().replace(microsecond=0).isoformat(), 'country': price_country if prices else None,
+             'games': games}
+    atomic_write_text(output, lambda w: json.dump(state, w, indent=2, ensure_ascii=False, sort_keys=True))
+    info("saved the wishlist to %s" % output)
+    if csv_output:
+        delimiter = delimiter or default_csv_delimiter()
+        write_wishlist_csv(csv_output, games, library_ids, delimiter, country)
+        info("wrote %d games to %s (column separator '%s')" % (len(games), csv_output, delimiter))
+
+
 def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipgalaxy,skipstandalone,skipshared,lang_fallback=None):
     gamesdb = load_manifest()
     selected_ids = resolve_ids_and_report(gamesdb, ids, '-ids') if ids else None       # the games that -ids means ...
@@ -6754,6 +7049,8 @@ def main(args):
         cmd_list(args.words, args.os, args.skipos, args.lang, args.skiplang, args.format)
     elif args.command == 'export':
         cmd_export(args.output, args.savedir, args.delimiter)
+    elif args.command == 'wishlist':
+        cmd_wishlist(args.output, args.csv, args.prices, args.country, args.currency, args.delimiter)
     elif args.command == "trash":
         if (args.installersonly):
             args.installers = True
@@ -6963,6 +7260,10 @@ if __name__ == "__main__":
         sys.exit(1)
     except SystemExit:
         raise
+    except TokenPasswordError as e:
+        error('%s' % e)         # no traceback: it is not a program error
+        error("If you have forgotten the password, delete %s and run the login command again." % TOKEN_FILENAME)
+        sys.exit(1)
     except Exception:
         log_exception('fatal...')
         sys.exit(1)
