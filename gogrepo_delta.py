@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.47'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.48'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -4450,6 +4450,7 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
             i += 1
             info("(%*d / %d) fetching game details for %s..." % (print_padding, i, items_count, item.title))
 
+            processed_successfully = False
             try:
                 response = request(updateSession,api_url)
 
@@ -4547,12 +4548,16 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
                 else:
                     gamesdb.append(item)
                     run_report.count('new games added')
+                processed_successfully = True
             except Exception as e:
                 warn("The handled exception was:")
                 log_exception('error')
                 warn("End exception report.")
                 run_report.fail(str(getattr(item, 'title', item)), "could not be fetched or processed: %s: %s" % (type(e).__name__, e))
-            resumedb.remove(item)
+            # Keep failed games in the resume manifest. They can then be retried
+            # on the next invocation instead of silently being marked complete.
+            if processed_successfully:
+                resumedb.remove(item)
             # Refactoring: this used to save after EVERY game in the default (-standard/-updateonly/-skipknown)
             # modes. Every save re-formats the whole manifest, which takes seconds on a large library and is far
             # more than fetching one game's details, so all modes now save every RESUME_SAVE_THRESHOLD games.
@@ -4586,10 +4591,15 @@ def cmd_update(os_list, lang_list, skipknown, updateonly, partial, ids, skipids,
     sorted_gamesdb =  sorted(gamesdb, key = lambda game : game.title)
     # save the manifest to disk
     save_manifest(sorted_gamesdb,update_md5_xml=md5xmls,delete_md5_xml=md5xmls)
-    resumeprop['complete'] = True
+    # The resume manifest is complete only when its only remaining entry is
+    # the properties record. Failed game entries intentionally remain pending.
+    resumeprop['complete'] = len(resumedb) == 1
     save_resume_manifest(resumedb)
     flush_summarised()
-    if (needresume):
+    if not resumeprop['complete']:
+        pending_count = len(resumedb) - 1
+        warn('%d game(s) could not be processed and remain in the resume manifest; run update again to retry them.' % pending_count)
+    elif needresume:
         info('resume completed')
         if (resumemode != 'onlyresume'):
             info('returning to specified download request...')

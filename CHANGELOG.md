@@ -16,7 +16,6 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 
 ## Known issues (not fixed yet)
 
-- `update` reports a game that it could not fetch as failed, but still drops it from the resume list, so an interrupted run does not try it first.
 - Unreachable code is kept as it was: the `AttributeError` defaults for `folder_name`, `galaxyDownloads` and `sharedDownloads` in `cmd_download`
   (`handle_game_renames` sets them first), the `SSLError` branch in `_download_ioloop` (an `SSLError` is a `ConnectionError` and is caught by the
   branch before it) and the `os.makedirs(dest_dir)` in `_prepare_download_file`.
@@ -32,6 +31,14 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - Saving the legacy manifest format still re-formats the whole manifest on every save (the cost grows with the library); it is not the default.
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
+
+## 0.5.48 - 07.11.2026 - Failed game details remain pending in the resume manifest
+
+- A game whose details could not be fetched or processed is no longer removed from the resume manifest. It remains pending, and `complete` stays false until every game has been processed successfully.
+- A later `update` retries the pending game. The run reports how many games remain pending and tells the user to run `update` again.
+- `tests/test_update_saves.py`: regression tests cover retaining a failed game, keeping the resume manifest incomplete, and retrying the game successfully on the next run.
+
+DIFFERENCE: failed game-detail requests are retried on a later `update` instead of being silently discarded from resume state.
 
 ## 0.5.47 - 07.11.2026 - `wishlist -csv` without a file name writes `gog-wishlist.csv`
 
