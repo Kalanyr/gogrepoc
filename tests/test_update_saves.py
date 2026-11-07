@@ -20,7 +20,7 @@ class FakeResponse(object):
         return self._data
 
 
-def fake_api(count, interrupt_on_id=None):
+def fake_api(count, interrupt_on_id=None, fail_on_id=None):
     products = [dict(id=1000 + i, slug='game_%03d' % i, title='Game %d' % i, category='RPG', image='//images.test/%d' % i,
                      url='/game/game_%03d' % i, rating=40, updates=0) for i in range(count)]
 
@@ -33,6 +33,8 @@ def fake_api(count, interrupt_on_id=None):
             game_id = int(url.rsplit('/', 1)[1].split('.')[0])
             if game_id == interrupt_on_id:
                 raise KeyboardInterrupt()
+            if game_id == fail_on_id:
+                raise g.requests.exceptions.ConnectionError('temporary connection failure')
             return FakeResponse(detail(game_id))
         return FakeResponse(dict(products=products, totalPages=1))
     return request
@@ -50,7 +52,7 @@ class UpdateSaveTests(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     @contextlib.contextmanager
-    def api(self, count, interrupt_on_id=None):
+    def api(self, count, interrupt_on_id=None, fail_on_id=None):
         real_save, real_resume = g.save_manifest, g.save_resume_manifest
 
         def save(*a, **k):
@@ -60,7 +62,7 @@ class UpdateSaveTests(unittest.TestCase):
         def save_resume(*a, **k):
             self.saves['resume'] += 1
             return real_resume(*a, **k)
-        with mock.patch.object(g, 'request', fake_api(count, interrupt_on_id)), \
+        with mock.patch.object(g, 'request', fake_api(count, interrupt_on_id, fail_on_id)), \
                 mock.patch.object(g, 'makeGOGSession', lambda: SimpleNamespace(token={})), \
                 mock.patch.object(g, 'save_manifest', save), mock.patch.object(g, 'save_resume_manifest', save_resume):
             yield
@@ -99,6 +101,27 @@ class UpdateSaveTests(unittest.TestCase):
         self.assertEqual(self.titles(), ['game_%03d' % i for i in range(8)])
         pending = g.load_resume_manifest()
         self.assertTrue(pending[-1]['complete'])
+
+    def test_a_failed_game_stays_in_the_resume_manifest_and_is_not_marked_complete(self):
+        with self.api(5, fail_on_id=1002):
+            self.update()
+
+        pending = g.load_resume_manifest()
+        self.assertFalse(pending[-1]['complete'])
+        self.assertEqual([1002], [item.id for item in pending[:-1]])
+        self.assertEqual(4, len(self.titles()))
+
+    def test_a_failed_game_is_retried_by_the_next_update(self):
+        with self.api(5, fail_on_id=1002):
+            self.update()
+
+        with self.api(5):
+            self.update()
+
+        self.assertEqual(['game_%03d' % i for i in range(5)], self.titles())
+        pending = g.load_resume_manifest()
+        self.assertTrue(pending[-1]['complete'])
+        self.assertEqual(1, len(pending), 'only the resume properties record should remain')
 
     def test_a_second_ctrl_c_during_the_save_keeps_the_previous_manifest(self):
         with self.api(8):
