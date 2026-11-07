@@ -33,6 +33,58 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.47 - 07.11.2026 - `wishlist -csv` without a file name writes `gog-wishlist.csv`
+
+- `-csv` takes an optional file name now (`nargs='?'`): `wishlist -csv` writes `gog-wishlist.csv` (`WISHLIST_CSV_FILENAME`), `wishlist -csv my.csv` writes `my.csv`, and without `-csv` no CSV file is written, as before.
+  Another option after `-csv` is not taken as its file name (`wishlist -csv -prices`). A `csv = ...` entry of the configuration file works as before.
+- `tests/test_wishlist.py`: 9 new tests (47 in total), among them how `-csv` and a `csv = ...` entry of the configuration file go together (the command line wins).
+
+DIFFERENCE: `-csv` alone was an error ("expected one argument") and now works; nothing else changes.
+
+## 0.5.46 - 07.11.2026 - A wrong token password is asked for again
+
+- **A wrong password no longer ends the run with a traceback.** `_read_token_json` now asks for the password again (`Wrong password. Please try again (1 of 3).`), up to `TOKEN_PASSWORD_ATTEMPTS` (3) times, when the program is
+  run from a terminal (`_can_prompt_again()`); in a scheduled task or a pipe there is one attempt, as before. The wrong password is forgotten, so it is never used twice, and the right one is kept for the rest of the run
+  (saving the refreshed token does not ask again).
+- **An empty password** is asked for again as well. It used to be stored as the password (`_TOKEN_PASSWORD = ''`), so a second call did not ask any more.
+- **After the last attempt** the same `could not decrypt token file (wrong password or damaged file)` is raised, now as `TokenPasswordError` (a `ValueError`, so existing handlers still work); the top level logs it without a traceback,
+  with the hint to delete `gog-token.json` and run `login` again if the password is forgotten, and exits with status 1.
+- `tests/test_token_password.py`: 10 tests. (The top-level message in the `__main__` block is not covered by a test.)
+
+DIFFERENCE: only the handling of a wrong or empty token password.
+
+## 0.5.45 - 07.11.2026 - `wishlist`: release dates by country, `UK`, and an empty wishlist
+
+- **Release date of the CSV by country.** `wishlist -country DE -csv ...` writes `23.06.2026` instead of GOG's `2026-06-23T18:59:00+0200`: `format_release_date()` uses the order and separators of the country
+  (DE, AT, CH, PL, CZ ... `23.06.2026`; GB, FR, ES, IT, AU, BR ... `23/06/2026`; US, PH `06/23/2026`; NL `23-06-2026`; JP, CN, TW `2026/06/23`; KR, HU `2026. 06. 23.`) and ISO `2026-06-23` without a country or for a
+  country that is not in the list. The day is the one in GOG's text (no time zone conversion). The saved JSON file keeps the original text.
+- **`-country` has no default value any more** (it is still `US` for the prices): the dates are only written for a country that was given. A configuration file entry `country = ...` works as before.
+- **`UK` is taken as `GB`** (`UK` is not an ISO code; GOG answers 400 Bad Request for it). **A country GOG refuses is not retried:** a 400 on the price request is reported once ("use the two-letter ISO code, for example GB"),
+  counted as one failure, and the other prices are not requested; the wishlist is still saved. Before, the same request was repeated 4 times with 5 seconds in between, for every game. `request()` has a new
+  parameter `no_retry_statuses` for this (statuses that are raised at once for that call only; the global `http_no_retry_codes` are unchanged).
+- **An empty wishlist** is sent by GOG as `"wishlist": []`, not `{}`; it was refused with "the answer of GOG has no "wishlist" list". It is read as 0 games (games that were on the list before are reported as removed);
+  a list of ids is accepted too.
+- `tests/test_wishlist.py`: 38 tests (13 new).
+
+DIFFERENCE: only the `wishlist` command and one new optional parameter of `request()`.
+
+## 0.5.44 - 07.11.2026 - New command `wishlist`: save the GOG wishlist and see what changed
+
+- **New:** `wishlist` saves the games on the wishlist of the logged-in account to `gog-wishlist.json` (`-output`) and reports what changed since the last run: added games, removed games
+  (and which of them are now in the manifest), and, with `-prices`, games whose price went down or up. `-csv FILE` writes a spreadsheet (`-delimiter` as for `export`; with `;` the prices use
+  decimal commas). Nothing is downloaded: wishlist games are not owned, and GOG gives installers only for owned games.
+- **The addresses** (not documented by GOG): `embed.gog.com/user/wishlist.json` (`{"wishlist": {"<id>": true, ...}, "checksum": ...}`), `api.gog.com/products/<id>` for title, slug, release date and
+  store link, and `api.gog.com/products/<id>/prices?countryCode=DE`, which lists one price per currency as `"<cents> <currency>"` strings (`"999 EUR"`). Prices are kept as integer cents
+  (`parse_gog_money()`, `choose_price()`); `-country` (default `US`) and `-currency` (default: the first one listed) pick what is saved. The format of the first two was checked with real answers
+  of an account; the details of `api.gog.com/products/<id>` (`title`, `slug`, `release_date`, `links.product_card`) are read defensively and every field is optional.
+- **Details are fetched once** and kept in the file, so a later run only asks for new games (and for games whose details were not available before); prices are fetched for every game on each run with `-prices`.
+  A game GOG has no details or price for (404) is kept without them and is not a failure; other request errors are failures (exit status 1). Without `-prices` the saved prices stay and are not reported as changes.
+- It uses the normal `request()` (timeouts, retries, the token refresh) and writes the file atomically. A saved file that cannot be read means a first run, with a warning.
+- `tests/test_wishlist.py`: 25 tests against a local fake GOG server that answers in the format of the real responses.
+
+DIFFERENCE: a new command only; no existing command, manifest or option changes. **Not tested against the live service:** whether the token the program holds is accepted by `embed.gog.com/user/wishlist.json` (as it is by the other `embed.gog.com` calls) has to be
+confirmed with a real run; if GOG answers with a login page, the command says so and suggests logging in again.
+
 ## 0.5.43 - 06.11.2026 - The PyObjC package to install is `pyobjc-framework-Cocoa`
 
 - The macOS build in `build.yml` failed at "Install macOS-only dependencies" (`No matching distribution found for pyobjc-framework-CoreFoundation`): that package name does not
