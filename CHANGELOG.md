@@ -32,13 +32,35 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
-## 0.5.48 - 07.11.2026 - Failed game details remain pending in the resume manifest
+## 0.5.50 - 07.11.2026 - Failed game details remain pending in the resume manifest
 
 - A game whose details could not be fetched or processed is no longer removed from the resume manifest. It remains pending, and `complete` stays false until every game has been processed successfully.
 - A later `update` retries the pending game. The run reports how many games remain pending and tells the user to run `update` again.
 - `tests/test_update_saves.py`: regression tests cover retaining a failed game, keeping the resume manifest incomplete, and retrying the game successfully on the next run.
 
 DIFFERENCE: failed game-detail requests are retried on a later `update` instead of being silently discarded from resume state.
+
+## 0.5.49 - 07.11.2026 - `wishlist`: the CSV always writes the release date as ISO (2026-11-05)
+
+- **The date of the CSV is `YYYY-MM-DD` in every case.** The by-country formats of 0.5.45 are gone (`_DATE_FORMATS` and the `country` parameter of `format_release_date()` and `write_wishlist_csv()`): Excel reads a date in
+  the order of the computer's language, so `11/05/2026` became 11 May on a German Excel while `06/23/2026` was left as text. `2026-11-05` is understood in every locale and then shown the local way. The day is
+  the one in GOG's text (no time zone conversion); the saved JSON file keeps the original text.
+- **`-country` is only for the prices** (default `US`; `UK` is taken as `GB`), as before. The extra text about the date format in the message after the CSV (0.5.48) is gone again.
+- `tests/test_wishlist.py`: the date tests are for the ISO form, and one checks that the country still selects the prices and nothing else (53 tests).
+
+DIFFERENCE: the release date column of the CSV is ISO instead of the format of the country.
+
+## 0.5.48 - 07.11.2026 - `wishlist`: a CSV file that is open in Excel is reported instead of a traceback
+
+- **A locked CSV file.** On Windows a spreadsheet program that has the file open makes writing it fail with `PermissionError`, which ended the run with a traceback (`fatal...`) after the saved list had been updated.
+  Now `file_write_problem()` checks the CSV file first, before anything is fetched (opening for appending changes nothing in the file and a file that did not exist is not left behind), and the command says
+  `cannot write gog-wishlist.csv (Permission denied). If the file is open in another program, for example Excel, please close it and run the command again.`, counts one failure (`csv: file cannot be written`) and exits with status 1.
+- **The CSV is written before the saved list is updated.** If the file gets locked after the check, the same message appears and the saved list is left as it was, so the next run reports the same changes again instead of "no changes".
+  A saved list (`-output`) that cannot be written is reported the same way instead of with a traceback.
+- **The message after the CSV says which date format was used** (`dates as written in DE, like 31.12.2026`, or `dates as 2026-12-31 (give -country ...)` without a country), so it is visible why the dates look as they do.
+- `tests/test_wishlist.py`: 7 new tests (54 in total).
+
+DIFFERENCE: only the error handling of the `wishlist` files and the wording of one message.
 
 ## 0.5.47 - 07.11.2026 - `wishlist -csv` without a file name writes `gog-wishlist.csv`
 

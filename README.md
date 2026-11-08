@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.47-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.50-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -39,7 +39,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.47` |
+| **Current version** | `v0.5.50` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -393,10 +393,12 @@ Saves the games on your GOG wishlist to `gog-wishlist.json` and says what change
 The title, release date and store link of a game are fetched once and kept in the file, so later runs only ask GOG about new games. Requires `login` (the wishlist belongs to your account).
 
 - `--prices`: also fetch the price of every game (one more request per game). Games without a price in the store (delisted, unreleased, not sold in that country) simply have none.
-- `--country CODE`: the two-letter country (`DE`, `GB`, `US`, ...). The prices are for it (default: `US`), and the CSV writes the release date the way people there do: `DE` 23.06.2026, `GB` 23/06/2026, `US` 06/23/2026 (ISO `2026-06-23` if no country is given or it is not one of the known ones). The saved JSON file keeps GOG's original date. `UK` is taken as `GB`; a country GOG does not accept for prices is reported once and stops the price requests.
+- `--country CODE`: the two-letter country the prices are for, like `DE`, `GB` or `US` (default: `US`). `UK` is taken as `GB`; a country GOG does not accept for prices is reported once and stops the price requests.
 - `--currency CODE`: GOG gives one price per currency for a country (for example EUR and USD for `DE`); by default the first one is used.
 - `--output FILE`: where to save the wishlist and what the next run compares with (default: `gog-wishlist.json`).
-- `--csv [FILE]`: also write a spreadsheet (without a file name: `gog-wishlist.csv`) with title, release date, store link, "in library", regular price, price, discount and promotion. `--delimiter CHAR` works as for `export`; with `;` the prices use decimal commas.
+- `--csv [FILE]`: also write a spreadsheet (without a file name: `gog-wishlist.csv`) with title, release date (always as `2026-11-05`), store link, "in library", regular price, price, discount and promotion. `--delimiter CHAR` works as for `export`; with `;` the prices use decimal commas. The date is ISO on purpose: a spreadsheet reads a date in the order of your computer's language (`11/05/2026` becomes 11 May on a German Excel, and `06/23/2026` stays text), while `2026-11-05` is understood everywhere and then shown the local way.
+
+If the CSV file is open in another program (on Windows, Excel locks it), the command says so before it fetches anything ("please close it and run the command again") and fails with exit status `1`; the CSV is written before the saved list is updated, so a later run still reports the changes.
 
 The wishlist and price addresses are not officially documented by GOG and could change; if GOG answers with something unexpected, the command says so and fails with exit status `1`. Prices are rounded to what GOG reports in cents.
 
@@ -561,7 +563,7 @@ Logs are written to `gogrepo.log`, with timestamps and severity levels. Common o
 - `--debug`: enable additional debug output.
 - Log rotation is configurable in `gogrepo_delta.cfg`.
 
-The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.47 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
+The first line of every run in the log file is the version of the program, with the Python and the system it ran on (for example `gogrepo_delta.py version 0.5.50 (Python 3.14.0, Windows-11-...)`). It is written to the file only, not to the console, and not with `--nolog`.
 
 At the end of a command, the program reports a summary of completed work and lists failures with reasons. `files downloaded` counts the files of which data was fetched, with the amount that really came from GOG; `files verified in place (nothing downloaded)` counts files that were marked for change but were already right on the disk, chunk by chunk, and needed no data. Completed files recovered from an earlier interrupted run are included in the recovery count.
 

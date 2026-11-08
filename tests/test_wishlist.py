@@ -302,7 +302,7 @@ class CsvTests(WishlistBase):
         rows = self.read('w.csv', ',')
         self.assertEqual(['game id', 'title', 'release date', 'store url', 'in library', 'currency', 'regular price', 'price', 'discount %', 'promo'], rows[0])
         by_id = {r[0]: r for r in rows[1:]}
-        self.assertEqual(['Alpha Quest', '02.01.2020', 'https://www.gog.com/game/alpha_quest', 'no', 'EUR', '19.99', '9.99', '50', '20261105_fantasy_promo'], by_id['111'][1:])
+        self.assertEqual(['Alpha Quest', '2020-01-02', 'https://www.gog.com/game/alpha_quest', 'no', 'EUR', '19.99', '9.99', '50', '20261105_fantasy_promo'], by_id['111'][1:])
         self.assertEqual('yes', by_id['222'][4])
         self.assertEqual(['', '', '', ''], by_id['333'][5:9])               # no price: empty cells
         self.assertEqual(['Alpha Quest', 'Beta Racer', 'Gamma Tactics'], [r[1] for r in rows[1:]])
@@ -317,27 +317,23 @@ class CsvTests(WishlistBase):
 class DateFormatTests(unittest.TestCase):
     RAW = '2026-06-23T18:59:00+0200'
 
-    def test_the_date_is_written_the_way_the_country_writes_it(self):
-        for country, expected in (('DE', '23.06.2026'), ('AT', '23.06.2026'), ('PL', '23.06.2026'), ('GB', '23/06/2026'), ('FR', '23/06/2026'), ('US', '06/23/2026'),
-                                  ('NL', '23-06-2026'), ('JP', '2026/06/23'), ('KR', '2026. 06. 23.'), ('SE', '2026-06-23')):
-            self.assertEqual(expected, g.format_release_date(self.RAW, country), country)
+    def test_the_date_is_written_in_iso_form_whatever_the_time_and_offset(self):
+        self.assertEqual('2026-06-23', g.format_release_date(self.RAW))
+        self.assertEqual('2026-11-05', g.format_release_date('2026-11-05T19:00:00+0100'))
+        self.assertEqual('2027-01-01', g.format_release_date('2027-01-01'))
 
-    def test_the_country_is_not_case_sensitive(self):
-        self.assertEqual('23.06.2026', g.format_release_date(self.RAW, 'de'))
-
-    def test_without_a_country_or_with_an_unknown_one_it_is_iso(self):
-        self.assertEqual('2026-06-23', g.format_release_date(self.RAW, None))
-        self.assertEqual('2026-06-23', g.format_release_date(self.RAW, ''))
-        self.assertEqual('2026-06-23', g.format_release_date(self.RAW, 'ZZ'))
-
-    def test_a_plain_date_works_and_the_day_is_the_one_in_the_text(self):
-        self.assertEqual('01.01.2027', g.format_release_date('2027-01-01', 'DE'))
-        self.assertEqual('31.12.2026', g.format_release_date('2026-12-31T23:30:00-0800', 'DE'))      # no time zone conversion
+    def test_the_day_is_the_one_in_the_text(self):
+        self.assertEqual('2026-12-31', g.format_release_date('2026-12-31T23:30:00-0800'))      # no time zone conversion
 
     def test_something_that_is_not_a_date_comes_back_unchanged(self):
-        self.assertEqual('soon', g.format_release_date('soon', 'DE'))
-        self.assertEqual('', g.format_release_date(None, 'DE'))
-        self.assertEqual('', g.format_release_date('', 'DE'))
+        self.assertEqual('soon', g.format_release_date('soon'))
+        self.assertEqual('', g.format_release_date(None))
+        self.assertEqual('', g.format_release_date(''))
+
+    def test_a_date_that_a_spreadsheet_could_misread_is_never_written(self):
+        # 11/05/2026 is 11 May on a German Excel and 06/23/2026 stays text: only the ISO form means the same everywhere
+        self.assertNotIn('/', g.format_release_date('2026-11-05T19:00:00+0100'))
+        self.assertNotIn('.', g.format_release_date('2026-11-05T19:00:00+0100'))
 
 
 class CountryAndEmptyListTests(WishlistBase):
@@ -345,14 +341,20 @@ class CountryAndEmptyListTests(WishlistBase):
         with open(path, encoding='utf-8-sig', newline='') as f:
             return list(csv.reader(f, delimiter=','))
 
-    def test_csv_dates_follow_the_country_and_are_iso_without_one(self):
+    def test_csv_dates_are_iso_whatever_the_country(self):
         g.cmd_wishlist(csv_output='de.csv', country='DE', delimiter=',')
         g.cmd_wishlist(csv_output='us.csv', country='US', delimiter=',')
         g.cmd_wishlist(csv_output='none.csv', delimiter=',')
-        self.assertEqual('02.01.2020', self.read('de.csv')[1][2])
-        self.assertEqual('01/02/2020', self.read('us.csv')[1][2])
-        self.assertEqual('2020-01-02', self.read('none.csv')[1][2])
+        for name in ('de.csv', 'us.csv', 'none.csv'):
+            self.assertEqual('2020-01-02', self.read(name)[1][2], name)
         self.assertEqual('2020-01-02T00:00:00+0200', self.saved()['games']['111']['release_date'], 'the saved file keeps the original')
+
+    def test_the_country_still_selects_the_prices_and_nothing_else(self):
+        self.gog.prices = {'111': PRICES_ANSWER}
+        g.cmd_wishlist(prices=True, country='DE', csv_output='de.csv', delimiter=',')
+        self.assertTrue(any('countryCode=DE' in r for r in self.gog.requests))
+        self.assertEqual('DE', self.saved()['country'])
+        self.assertEqual('2020-01-02', self.read('de.csv')[1][2])
 
     def test_the_prices_need_no_country_option(self):
         self.gog.prices = {'111': PRICES_ANSWER}
@@ -365,7 +367,7 @@ class CountryAndEmptyListTests(WishlistBase):
         self.assertTrue(any('countryCode=GB' in r for r in self.gog.requests))
         self.assertFalse(any('countryCode=UK' in r for r in self.gog.requests))
         self.assertIn("'UK' is not an ISO country code; using GB", self.log.messages('INFO'))
-        self.assertEqual('02/01/2020', self.read('uk.csv')[1][2])
+        self.assertEqual('2020-01-02', self.read('uk.csv')[1][2])
         self.assertEqual([], g.run_report.failures)
 
     def test_a_country_gog_refuses_stops_the_price_requests_after_the_first(self):
@@ -424,6 +426,71 @@ class CsvOptionTests(unittest.TestCase):
     def test_csv_can_come_last_or_first(self):
         self.assertEqual('gog-wishlist.csv', self.parse('-prices', '-csv').csv)
         self.assertTrue(self.parse('-csv', '-prices').prices)
+
+
+class LockedFileTests(WishlistBase):
+    """On Windows a CSV file that is open in Excel cannot be written (PermissionError)."""
+    def test_a_csv_file_that_cannot_be_opened_is_reported_before_anything_is_fetched(self):
+        os.mkdir('blocked.csv')                                  # cannot be opened for writing, on every system
+        g.cmd_wishlist(csv_output='blocked.csv')
+        self.assertEqual([], self.gog.requests, 'nothing is requested')
+        self.assertFalse(os.path.exists('gog-wishlist.json'))
+        errors = self.log.messages('ERROR')
+        self.assertEqual(1, len(errors))
+        self.assertIn('cannot write blocked.csv', errors[0])
+        self.assertIn('please close it and run the command again', errors[0])
+        self.assertEqual([('csv', 'file cannot be written')], g.run_report.failures)
+        self.assertEqual(1, g.run_report.exit_status())
+
+    def test_the_early_check_is_the_one_a_locked_file_fails(self):
+        real_open = open
+
+        def refuse_append(path, mode='r', *args, **kwargs):
+            if str(path).endswith('locked.csv') and 'a' in mode:
+                raise PermissionError(13, 'Permission denied')
+            return real_open(path, mode, *args, **kwargs)
+        with mock.patch('builtins.open', refuse_append):
+            g.cmd_wishlist(csv_output='locked.csv')
+        self.assertEqual([], self.gog.requests)
+        self.assertIn('Permission denied', self.log.messages('ERROR')[0])
+
+    def test_a_file_that_gets_locked_during_the_run_is_reported_and_the_saved_list_is_not_updated(self):
+        g.cmd_wishlist()
+        self.gog.wishlist['444'] = True
+        self.gog.product('444', 'Delta Force')
+        before = self.saved()
+        with mock.patch.object(g, 'write_wishlist_csv', side_effect=PermissionError(13, 'Permission denied')):
+            g.cmd_wishlist(csv_output='w.csv')
+        self.assertIn('please close it and run the command again', self.log.messages('ERROR')[-1])
+        self.assertEqual(before, self.saved(), 'the list is unchanged, so the next run reports the new game again')
+        self.assertEqual(1, g.run_report.exit_status())
+        g.run_report.reset('wishlist')
+        self.log.records[:] = []
+        g.cmd_wishlist(csv_output='w.csv')
+        self.assertIn('new on the wishlist: Delta Force', self.log.messages())
+        self.assertTrue(os.path.exists('w.csv'))
+
+    def test_a_writable_csv_is_not_changed_by_the_check_and_a_missing_one_is_not_left_behind(self):
+        with open('keep.csv', 'w', encoding='utf-8') as f:
+            f.write('keep me')
+        before = os.stat('keep.csv')
+        self.assertIsNone(g.file_write_problem('keep.csv'))
+        with open('keep.csv', encoding='utf-8') as f:
+            self.assertEqual('keep me', f.read())
+        self.assertEqual(before.st_mtime, os.stat('keep.csv').st_mtime)
+        self.assertIsNone(g.file_write_problem('new.csv'))
+        self.assertFalse(os.path.exists('new.csv'))
+
+    def test_the_saved_list_that_cannot_be_written_is_reported_too(self):
+        with mock.patch.object(g, 'atomic_write_text', side_effect=PermissionError(13, 'Permission denied')):
+            g.cmd_wishlist()
+        self.assertIn('cannot write gog-wishlist.json', self.log.messages('ERROR')[-1])
+        self.assertEqual([('wishlist', 'file cannot be written')], g.run_report.failures)
+
+    def test_a_normal_run_still_writes_both_files(self):
+        g.cmd_wishlist(csv_output='w.csv')
+        self.assertTrue(os.path.exists('w.csv') and os.path.exists('gog-wishlist.json'))
+        self.assertEqual([], g.run_report.failures)
 
 
 class CsvConfigFileTests(unittest.TestCase):

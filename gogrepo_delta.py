@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.48'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.50'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -3198,7 +3198,7 @@ def build_parser():
     g1.add_argument('-output', action='store', default=WISHLIST_FILENAME, help='file to save the wishlist to, and to compare with the next time (default: %s)' % WISHLIST_FILENAME)
     g1.add_argument('-csv', action='store', nargs='?', const=WISHLIST_CSV_FILENAME, default=None, metavar='FILE', help='also write the wishlist as a spreadsheet (CSV file) to this file (default file name: %s)' % WISHLIST_CSV_FILENAME)
     g1.add_argument('-prices', action='store_true', help='also fetch the price of every game (one more request per game)')
-    g1.add_argument('-country', action='store', default=None, help='two-letter country code (like DE, GB, US): the prices are for it (default: US) and the release dates of the CSV are written the way it does')
+    g1.add_argument('-country', action='store', default=None, help='two-letter country code the prices are for, like DE, GB or US (default: US)')
     g1.add_argument('-currency', action='store', default=None, help='currency to show when GOG gives several for the country, like EUR (default: the first one)')
     g1.add_argument('-delimiter', action='store', default=None, help="column separator of the CSV file; default is ';' for most languages (what their Excel expects) and ',' for English, Japanese, Chinese, Korean, Thai and Hebrew")
     add_common_flags(g1)
@@ -3418,7 +3418,7 @@ CONFIG_NOTES = [
             ('skippreallocation', 'do not preallocate space for files'))),
     (('wishlist',), (('csv', 'also write the wishlist as a spreadsheet (CSV file) to this file (gog-wishlist.csv if no file name is given)'),
                      ('prices', 'also fetch the price of every game'),
-                     ('country', 'two-letter country code: the prices are for it (default US) and the CSV writes the release dates the way it does'),
+                     ('country', 'two-letter country code the prices are for (default US)'),
                      ('currency', 'currency to show when GOG gives several for the country, like EUR'))),
     (('import',), (('src_dir', 'folder to import games from'),
                    ('dest_dir', 'folder to copy and name the imported files to'))),
@@ -6032,29 +6032,13 @@ def choose_price(price_list, currency=None):
     return None
 
 
-# How a date is written in the country of the prices (the day-month-year order and the separators); other countries get the ISO form 2026-06-23.
-_DATE_FORMATS = {}
-for _pattern, _countries in (
-        ('%d.%m.%Y', 'DE AT CH LI LU PL CZ SK SI HR RS BA ME MK BG RO RU UA BY FI NO IS TR EE LV DK'),
-        ('%d/%m/%Y', 'GB IE FR ES IT PT BE GR CY MT AU NZ IN ZA BR AR CL CO PE MX SG HK MY TH VN ID IL AE SA EG MA'),
-        ('%m/%d/%Y', 'US PH'),
-        ('%d-%m-%Y', 'NL'),
-        ('%Y/%m/%d', 'JP CN TW'),
-        ('%Y. %m. %d.', 'KR HU')):
-    for _country in _countries.split():
-        _DATE_FORMATS[_country] = _pattern
-
-
-def format_release_date(text, country=None):
-    """The date part of GOG's release date ('2026-06-23T18:59:00+0200') written the way people in that country write it: DE 23.06.2026,
-    GB 23/06/2026, US 06/23/2026; ISO (2026-06-23) without a country or for one that is not in the list. The day is the one in the text (no
-    time zone conversion). Something that is not a date comes back unchanged."""
-    match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', text) if isinstance(text, str) else None
-    if not match:
-        return text or ''
-    year, month, day = match.groups()
-    pattern = _DATE_FORMATS.get((country or '').upper(), '%Y-%m-%d')
-    return pattern.replace('%Y', year).replace('%m', month).replace('%d', day)
+def format_release_date(text):
+    """The date part of GOG's release date ('2026-06-23T18:59:00+0200') as 2026-06-23, in every country. The day is the one in the text (no time zone
+    conversion). Something that is not a date comes back unchanged.
+    The ISO form is on purpose: a spreadsheet reads a date in the order of the computer's language, so '11/05/2026' becomes 11 May on a German
+    Excel and '06/23/2026' stays text; 2026-11-05 is understood everywhere and then shown the local way."""
+    match = re.match(r'^(\d{4}-\d{2}-\d{2})', text) if isinstance(text, str) else None
+    return match.group(1) if match else (text or '')
 
 
 def format_money(cents, currency, decimal='.'):
@@ -6141,7 +6125,7 @@ def wishlist_changes(old, new, library_ids=()):
     return changes
 
 
-def write_wishlist_csv(path, games, library_ids, delimiter, country=None):
+def write_wishlist_csv(path, games, library_ids, delimiter):
     decimal = ',' if delimiter == ';' else '.'          # a spreadsheet that wants ';' between columns writes decimals with a comma
     columns = ['game id', 'title', 'release date', 'store url', 'in library', 'currency', 'regular price', 'price', 'discount %', 'promo']
     with open(path, 'w', encoding='utf-8-sig', newline='') as f:
@@ -6152,10 +6136,32 @@ def write_wishlist_csv(path, games, library_ids, delimiter, country=None):
             discount = ''
             if price and price.get('base'):
                 discount = int(round(100.0 * (price['base'] - price['final']) / price['base']))
-            writer.writerow([game_id, game.get('title') or '', format_release_date(game.get('release_date'), country), game.get('store_url') or '',
+            writer.writerow([game_id, game.get('title') or '', format_release_date(game.get('release_date')), game.get('store_url') or '',
                              'yes' if str(game_id) in library_ids else 'no', price.get('currency', ''),
                              format_money(price['base'], '', decimal) if price else '', format_money(price['final'], '', decimal) if price else '',
                              discount, price.get('promo') or ''])
+
+
+def file_write_message(path, error_found):
+    """The message for a file that cannot be written; on Windows a spreadsheet program that has the file open is the usual reason."""
+    return ('cannot write %s (%s). If the file is open in another program, for example Excel, please close it and run the command again.'
+            % (path, getattr(error_found, 'strerror', None) or error_found))
+
+
+def file_write_problem(path):
+    """None if the file can be written (opening it for appending changes nothing), else the OSError. A file that is open in a spreadsheet program
+    is refused here (PermissionError on Windows). A file that did not exist is not left behind."""
+    existed = os.path.exists(path)
+    try:
+        open(path, 'a').close()
+    except OSError as e:
+        return e
+    if not existed:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return None
 
 
 def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, country=None, currency=None, delimiter=None):
@@ -6169,7 +6175,13 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
         error("-country must be a two-letter country code like DE or US (got '%s')" % country)
         run_report.fail('wishlist', 'invalid country')
         return
-    price_country = country or 'US'                       # the prices need a country; the dates of the CSV are only formatted for one that was given
+    price_country = country or 'US'                       # the prices need a country
+    if csv_output:                                        # before anything is fetched: a CSV file that is open in Excel cannot be written
+        problem = file_write_problem(csv_output)
+        if problem is not None:
+            error(file_write_message(csv_output, problem))
+            run_report.fail('csv', 'file cannot be written')
+            return
     session = makeGOGSession()
     previous = load_wishlist(output)
     try:
@@ -6235,14 +6247,25 @@ def cmd_wishlist(output=WISHLIST_FILENAME, csv_output=None, prices=False, countr
                 info('%s: %s -> %s (%s)' % (name(game_id), money(previous[game_id].get('price')), money(games[game_id].get('price')), label))
         if not any(changes.values()):
             info('no changes since the last run')
-    state = {'format': WISHLIST_FORMAT, 'saved': datetime.datetime.now().replace(microsecond=0).isoformat(), 'country': price_country if prices else None,
-             'games': games}
-    atomic_write_text(output, lambda w: json.dump(state, w, indent=2, ensure_ascii=False, sort_keys=True))
-    info("saved the wishlist to %s" % output)
+    # The CSV is written before the saved list is updated: if it cannot be (the file was opened in the meantime), the next run still reports the changes.
     if csv_output:
         delimiter = delimiter or default_csv_delimiter()
-        write_wishlist_csv(csv_output, games, library_ids, delimiter, country)
+        try:
+            write_wishlist_csv(csv_output, games, library_ids, delimiter)
+        except OSError as e:
+            error(file_write_message(csv_output, e))
+            run_report.fail('csv', 'file cannot be written')
+            return
         info("wrote %d games to %s (column separator '%s')" % (len(games), csv_output, delimiter))
+    state = {'format': WISHLIST_FORMAT, 'saved': datetime.datetime.now().replace(microsecond=0).isoformat(), 'country': price_country if prices else None,
+             'games': games}
+    try:
+        atomic_write_text(output, lambda w: json.dump(state, w, indent=2, ensure_ascii=False, sort_keys=True))
+    except OSError as e:
+        error(file_write_message(output, e))
+        run_report.fail('wishlist', 'file cannot be written')
+        return
+    info("saved the wishlist to %s" % output)
 
 
 def cmd_backup(src_dir, dest_dir,skipextras,os_list,lang_list,ids,skipids,skipgalaxy,skipstandalone,skipshared,lang_fallback=None):
