@@ -7,7 +7,7 @@
 A community-maintained Python tool for cataloguing, downloading, verifying, importing,
 backing up, and organizing GOG installers and bonus content.
 
-[![Version](https://img.shields.io/badge/version-0.5.50-blue)](https://github.com/MarS301/gogrepo_delta)
+[![Version](https://img.shields.io/badge/version-0.5.51-blue)](https://github.com/MarS301/gogrepo_delta)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-green)](LICENSE.md)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](#requirements-and-installation)
@@ -39,7 +39,7 @@ library and helps you maintain a dependable, verifiable local collection.
 
 | | |
 | --- | --- |
-| **Current version** | `v0.5.50` |
+| **Current version** | `v0.5.51` |
 | **Python requirement** | Python 3.10 or newer (3.8 and 3.9 start with a warning; best effort, not tested) |
 | **License** | GPL-3.0-or-later |
 | **Main script** | `gogrepo_delta.py` |
@@ -538,6 +538,9 @@ The program keeps its state files in the current working directory (unless confi
 | `gog-library.csv` | Default CSV export output. |
 | `gog-wishlist.json` | Default output of `wishlist`; the next run compares with it. |
 | `gog-wishlist.csv` | Default CSV output of `wishlist --csv`. |
+| `!md5_xmls/` | Cached MD5 XML files used to resume and verify downloads. |
+
+MD5 XML cleanup follows the current manifest, but is conservative when GOG metadata is incomplete. If a download or released extra has no filename, existing XML files in its affected folder are kept; they are only pruned as obsolete when the manifest has enough filename information to make that decision safely.
 
 ### Manifest format and recovery
 

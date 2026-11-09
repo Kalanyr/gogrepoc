@@ -32,6 +32,15 @@ code that were changed for an entry may carry a "Refactoring" comment or docstri
 - A save that is killed hard (power loss, task kill) between creating and renaming its temporary file leaves a randomly named `*.tmp` file behind;
   nothing removes it later (entry 30). They are ignored by `.gitignore`.
 
+## 0.5.51 - 08.11.2026 - Safer and less redundant MD5 XML cleanup
+
+- **Do not discard MD5 XML when GOG metadata is incomplete.** During cleanup, a download or released extra with no filename can indicate a metadata-fetch failure. Existing XML files in that affected language/download folder or extras folder are now retained instead of being treated as obsolete. Once all relevant entries have names again, normal stale-file cleanup resumes.
+- **Remove redundant directory enumeration.** The download-language XML directory is now listed once (the old code listed it twice through nested loops). The language list is also built in one pass instead of repeating the same scan for each item.
+- Existing named entries are still cleaned normally: stale XML is removed when the manifest has complete filename information, and expected XML files remain untouched.
+- `tests/test_md5_cleanup.py`: regression coverage for preserving existing download and extra MD5 XML when names are unknown, and for normal cleanup when names are known.
+
+DIFFERENCE: cleanup is deliberately more conservative when manifest metadata is incomplete; valid existing MD5 XML is no longer deleted on that evidence alone.
+
 ## 0.5.50 - 07.11.2026 - Failed game details remain pending in the resume manifest
 
 - A game whose details could not be fetched or processed is no longer removed from the resume manifest. It remains pending, and `complete` stays false until every game has been processed successfully.

@@ -8,7 +8,7 @@ if False:
 #END#
 __appname__ = 'gogrepo_delta.py'
 __author__ = 'eddie3,kalanyr,MarS301,claude.ai,chatgpt'
-__version__ = '0.5.50'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
+__version__ = '0.5.51'   # 0.5.N: N is the number of the newest entry in CHANGELOG.md (raise it with every new entry)
 __url__ = 'https://github.com/MarS301/gogrepo_delta'   # based on gogrepoc by kalanyr, which is based on gogrepo by eddie3
 
 # =============================================================================================
@@ -1206,11 +1206,10 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                                 else:
                                                     cur_fulldir3 = os.path.join(cur_fulldir2,cur_dir_file)
                                                     os_game_items = [x for x in all_items_by_title[cur_dir].downloads if x.os_type == cur_dir_file]
+                                                    langs = []
                                                     for game_item in os_game_items:
-                                                        langs = []
-                                                        for game_item in os_game_items:
-                                                            if game_item.lang not in langs:
-                                                                langs.append(game_item.lang)
+                                                        if game_item.lang not in langs:
+                                                            langs.append(game_item.lang)
                                                     for cur_dir_file in os.listdir(cur_fulldir3):
                                                         if os.path.isdir(os.path.join(cur_fulldir3,cur_dir_file)):
                                                             if cur_dir_file not in langs:
@@ -1220,23 +1219,26 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                                                 cur_fulldir4 = os.path.join(cur_fulldir3,cur_dir_file)
                                                                 lang_os_game_items = [x for x in os_game_items if x.lang == cur_dir_file]
                                                                 expected_filenames = []
+                                                                has_unknown_filename = False
                                                                 for game_item in lang_os_game_items:
-                                                                    if ( game_item.name is None ):
+                                                                    if game_item.name is None:
+                                                                        has_unknown_filename = True
                                                                         warn("Game item has OS and Lang but no name in game associated with " + cur_fulldir4)
                                                                         if game_item.provisional_name:
                                                                             warn("This was due to a failure to fetch file info: the provisional name of item was: " + game_item.provisional_name + " from " + game_item.manualUrl)
-                                                                    if ( game_item.name is not None ):
+                                                                    else:
                                                                         expected_filenames.append(game_item.name + ".xml")
-                                                                for cur_dir_file in os.listdir(cur_fulldir4):
 
-                                                                    for cur_dir_file in os.listdir(cur_fulldir4):
-                                                                        if os.path.isdir(os.path.join(cur_fulldir4, cur_dir_file)):
-                                                                            info("Removing subdirectory(?!) " + os.path.join(cur_fulldir4, cur_dir_file))
-                                                                            shutil.rmtree(os.path.join(cur_fulldir4, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
-                                                                        else:
-                                                                            if cur_dir_file not in expected_filenames:
-                                                                                info("Removing outdated file " + os.path.join(cur_fulldir4, cur_dir_file))
-                                                                                os.remove(os.path.join(cur_fulldir4, cur_dir_file))
+                                                                # Missing names can mean GOG metadata fetch failed. Do not
+                                                                # interpret incomplete metadata as proof that existing hashes are stale.
+                                                                for entry_name in os.listdir(cur_fulldir4):
+                                                                    entry_path = os.path.join(cur_fulldir4, entry_name)
+                                                                    if os.path.isdir(entry_path):
+                                                                        info("Removing subdirectory(?!) " + entry_path)
+                                                                        shutil.rmtree(entry_path) # There shouldn't be subdirectories here.
+                                                                    elif not has_unknown_filename and entry_name not in expected_filenames:
+                                                                        info("Removing outdated file " + entry_path)
+                                                                        os.remove(entry_path)
                                                         else:
                                                             info("Removing invalid file " + os.path.join(cur_fulldir3, cur_dir_file))
                                                             os.remove(os.path.join(cur_fulldir3, cur_dir_file))
@@ -1245,13 +1247,15 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                                 os.remove(os.path.join(cur_fulldir2, cur_dir_file))
                                     elif cur_dir_file== "extras":
                                         expected_filenames = []
+                                        has_unknown_filename = False
                                         for extra_item in all_items_by_title[cur_dir].extras:
-                                            if (extra_item.name is None):
-                                                    if not extra_item.unreleased:
-                                                        warn("Extra item that is probably released but has no name in extra associated with " + cur_fulldir2)
-                                                        if extra_item.provisional_name:
-                                                            warn("This was probably due to a failure to fetch file info: the provisional name of item was: " + extra_item.provisional_name + " from " + extra_item.manualUrl)
-                                            if (extra_item.name is not None):
+                                            if extra_item.name is None:
+                                                if not extra_item.unreleased:
+                                                    has_unknown_filename = True
+                                                    warn("Extra item that is probably released but has no name in extra associated with " + cur_fulldir2)
+                                                    if extra_item.provisional_name:
+                                                        warn("This was probably due to a failure to fetch file info: the provisional name of item was: " + extra_item.provisional_name + " from " + extra_item.manualUrl)
+                                            else:
                                                 expected_filenames.append(extra_item.name + ".xml")
 
                                         for cur_dir_file in os.listdir(cur_fulldir2):
@@ -1259,7 +1263,7 @@ def save_manifest(items,filepath=MANIFEST_FILENAME,update_md5_xml=False,delete_m
                                                 info("Removing subdirectory(?!) " + os.path.join(cur_fulldir2, cur_dir_file))
                                                 shutil.rmtree(os.path.join(cur_fulldir2, cur_dir_file)) #There shouldn't be subdirectories here ?? Nuke to keep clean.
                                             else:
-                                                if cur_dir_file not in expected_filenames:
+                                                if not has_unknown_filename and cur_dir_file not in expected_filenames:
                                                     info("Removing outdated file " + os.path.join(cur_fulldir2, cur_dir_file))
                                                     os.remove(os.path.join(cur_fulldir2, cur_dir_file))
                             else:
